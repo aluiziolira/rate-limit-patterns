@@ -19,9 +19,7 @@ class LocalBackend:
         self._state: dict[str, dict[str, Any]] = {}
         self._token_bucket = TokenBucketAlgorithm()
 
-    async def check_and_increment(
-        self, key: str, config: RateLimitConfig
-    ) -> RateLimitResult:
+    async def check_and_increment(self, key: str, config: RateLimitConfig) -> RateLimitResult:
         """Check and increment the rate limit counter for a key.
 
         Args:
@@ -37,9 +35,7 @@ class LocalBackend:
             msg = f"Unsupported algorithm: {config.algorithm}"
             raise NotImplementedError(msg)
 
-    async def _check_token_bucket(
-        self, key: str, config: RateLimitConfig
-    ) -> RateLimitResult:
+    async def _check_token_bucket(self, key: str, config: RateLimitConfig) -> RateLimitResult:
         """Check and increment using token bucket algorithm.
 
         Args:
@@ -52,15 +48,10 @@ class LocalBackend:
         current_time = time.time()
 
         # Get or initialize state
-        if key in self._state:
-            state = self._state[key]
-        else:
-            state = self._token_bucket.initial_state(config)
+        state = self._state[key] if key in self._state else self._token_bucket.initial_state(config)
 
         # Compute new state (pure function, does not mutate state)
-        allowed, new_state, metadata = self._token_bucket.compute(
-            state, config, current_time
-        )
+        allowed, new_state, metadata = self._token_bucket.compute(state, config, current_time)
 
         # Replace state with new state (do not mutate in-place)
         self._state[key] = new_state

@@ -102,9 +102,7 @@ class TestLocalBackend:
         assert "last_refill" in metrics
 
     @pytest.mark.asyncio
-    async def test_get_metrics_empty_for_unknown_key(
-        self, backend: LocalBackend
-    ) -> None:
+    async def test_get_metrics_empty_for_unknown_key(self, backend: LocalBackend) -> None:
         """get_metrics returns empty dict for unknown key."""
         metrics = await backend.get_metrics("unknown:key")
         assert metrics == {}
