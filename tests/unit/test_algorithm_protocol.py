@@ -1,6 +1,9 @@
 """Tests for the RateLimitAlgorithm protocol."""
 
+from typing import Any
+
 from rate_limit_patterns.algorithms.base import RateLimitAlgorithm
+from rate_limit_patterns.models import RateLimitConfig
 
 
 class FakeAlgorithm(RateLimitAlgorithm):
@@ -8,12 +11,16 @@ class FakeAlgorithm(RateLimitAlgorithm):
 
     def compute(
         self,
-        key: str,
-        limit: int,
-        window: int,
-    ) -> tuple[int, int]:
-        """Return a valid tuple of (current, remaining)."""
-        return (0, limit)
+        state: dict[str, Any],
+        config: RateLimitConfig,
+        current_time: float,
+    ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
+        """Return a valid tuple of (allowed, new_state, metadata)."""
+        return (True, state, {})
+
+    def initial_state(self, config: RateLimitConfig) -> dict[str, Any]:
+        """Return initial state for the algorithm."""
+        return {}
 
 
 def test_algorithm_protocol() -> None:
