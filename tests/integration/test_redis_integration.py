@@ -11,9 +11,7 @@ import pytest_asyncio
 from rate_limit_patterns.backend.redis import RedisBackend
 from rate_limit_patterns.models import RateLimitConfig
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("REDIS_URL"), reason="REDIS_URL not set"
-)
+pytestmark = pytest.mark.skipif(not os.getenv("REDIS_URL"), reason="REDIS_URL not set")
 
 
 @pytest_asyncio.fixture
