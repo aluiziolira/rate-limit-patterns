@@ -24,9 +24,7 @@ class TestRedisBackendUnit:
         )
 
     @pytest.mark.asyncio
-    async def test_backend_loads_lua_scripts(
-        self, mock_redis: MagicMock
-    ) -> None:
+    async def test_backend_loads_lua_scripts(self, mock_redis: MagicMock) -> None:
         """Backend loads Lua scripts on initialization."""
         with patch(
             "rate_limit_patterns.backend.redis.Redis",
@@ -57,9 +55,7 @@ class TestRedisBackendUnit:
             assert result.allowed is True
 
     @pytest.mark.asyncio
-    async def test_reset_deletes_key(
-        self, mock_redis: MagicMock
-    ) -> None:
+    async def test_reset_deletes_key(self, mock_redis: MagicMock) -> None:
         """reset() deletes the Redis key."""
         with patch(
             "rate_limit_patterns.backend.redis.Redis",
