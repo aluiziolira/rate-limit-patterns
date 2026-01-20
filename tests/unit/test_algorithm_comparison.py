@@ -14,9 +14,7 @@ class TestAlgorithmComparison:
         return LocalBackend()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "algorithm", ["token_bucket", "sliding_window", "leaky_bucket"]
-    )
+    @pytest.mark.parametrize("algorithm", ["token_bucket", "sliding_window", "leaky_bucket"])
     async def test_all_algorithms_respect_limit(
         self, backend: LocalBackend, algorithm: str
     ) -> None:
