@@ -63,9 +63,7 @@ class TestRateLimiter:
         assert allowed is True
 
     @pytest.mark.asyncio
-    async def test_reset_clears_state(
-        self, backend: LocalBackend, config: RateLimitConfig
-    ) -> None:
+    async def test_reset_clears_state(self, backend: LocalBackend, config: RateLimitConfig) -> None:
         """reset() clears limiter state."""
         limiter = RateLimiter(backend=backend, config=config)
 

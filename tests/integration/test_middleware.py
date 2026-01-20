@@ -17,6 +17,7 @@ class TestASGIMiddleware:
     @pytest.fixture
     def app(self) -> Starlette:
         """Create test app with middleware."""
+
         async def homepage(request):
             return JSONResponse({"status": "ok"})
 
@@ -33,7 +34,7 @@ class TestASGIMiddleware:
             RateLimitMiddleware,
             backend=backend,
             config=config,
-            key_extractor=lambda req: req.client.host or "unknown",
+            key_extractor=lambda req: req.client.host if req.client else "unknown",
         )
         return app
 

@@ -17,6 +17,7 @@ class TestRateLimitDecorator:
     @pytest.mark.asyncio
     async def test_allows_calls_under_limit(self, backend: LocalBackend) -> None:
         """Decorated function works under limit."""
+
         @rate_limit(backend=backend, limit=5, period=60, key="test")
         async def my_function():
             return "success"
@@ -28,6 +29,7 @@ class TestRateLimitDecorator:
     @pytest.mark.asyncio
     async def test_raises_over_limit(self, backend: LocalBackend) -> None:
         """Decorated function raises RateLimitExceeded over limit."""
+
         @rate_limit(backend=backend, limit=2, period=60, key="test2")
         async def my_function():
             return "success"
@@ -43,6 +45,7 @@ class TestRateLimitDecorator:
     @pytest.mark.asyncio
     async def test_key_from_argument(self, backend: LocalBackend) -> None:
         """Key extracted from function argument."""
+
         @rate_limit(backend=backend, limit=2, period=60, key="user_id")
         async def my_function(user_id: str):
             return f"hello {user_id}"
