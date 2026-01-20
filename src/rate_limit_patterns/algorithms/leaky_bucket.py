@@ -72,9 +72,7 @@ class LeakyBucketAlgorithm:
 
             # Calculate retry_after (guard against rate <= 0)
             if rate > 0:
-                retry_after = math.ceil(
-                    ((queue_after_leak + 1.0) - capacity) / rate
-                )
+                retry_after = math.ceil(((queue_after_leak + 1.0) - capacity) / rate)
                 retry_after = max(1, retry_after)  # Ensure at least 1 second
             else:
                 retry_after = 1
