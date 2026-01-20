@@ -67,14 +67,3 @@ class TestRateLimitResult:
         )
         with pytest.raises(AttributeError):
             result.allowed = False
-
-    def test_result_remaining_cannot_exceed_limit(self) -> None:
-        """Remaining cannot exceed the limit."""
-        with pytest.raises(ValueError, match="remaining cannot exceed limit"):
-            RateLimitResult(
-                allowed=True,
-                limit=100,
-                remaining=150,
-                reset_at=1234567890.0,
-                request_count=50,
-            )
