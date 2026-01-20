@@ -63,5 +63,5 @@ class RateLimitResult:
     request_count: int = 0
 
     def __post_init__(self) -> None:
-        if self.remaining > self.limit:
-            raise ValueError("remaining cannot exceed limit")
+        if self.remaining < 0:
+            raise ValueError("remaining cannot be negative")
