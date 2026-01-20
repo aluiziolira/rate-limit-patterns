@@ -1,0 +1,65 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+*.eggs/
+build/
+dist/
+wheelhouse/
+
+# === Poetry ===
+.venv/
+
+# === pytest ===
+.pytest_cache/
+.coverage
+htmlcov/
+.coveragerc
+
+# === mypy ===
+.mypy_cache/
+*.pyi
+
+# === ruff ===
+.ruff_cache/
+
+# === IDEs ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# === Logs ===
+*.log
+logs/
+
+# === Testing ===
+.pytest_cache/
+.coverage.*
+coverage.xml
+*.cover
+
+# === Type checking ===
+.mypy_cache/
+dmypy.json
+dmypy_report.json
+
+# === Temporary ===
+tmp/
+temp/
+*.tmp
+*.temp
