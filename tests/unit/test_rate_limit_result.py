@@ -16,13 +16,15 @@ class TestRateLimitResult:
             allowed=True,
             limit=100,
             remaining=99,
-            reset=1234567890,
+            reset_at=1234567890.0,
+            request_count=1,
         )
         assert result.allowed is True
         assert result.limit == 100
         assert result.remaining == 99
-        assert result.reset == 1234567890
+        assert result.reset_at == 1234567890.0
         assert result.retry_after is None
+        assert result.request_count == 1
 
     def test_denied_result_includes_retry_after(self) -> None:
         """Denied result includes retry_after field."""
@@ -30,14 +32,16 @@ class TestRateLimitResult:
             allowed=False,
             limit=100,
             remaining=0,
-            reset=1234567890,
+            reset_at=1234567890.0,
             retry_after=30,
+            request_count=100,
         )
         assert result.allowed is False
         assert result.limit == 100
         assert result.remaining == 0
-        assert result.reset == 1234567890
+        assert result.reset_at == 1234567890.0
         assert result.retry_after == 30
+        assert result.request_count == 100
 
     def test_denied_result_without_retry_after(self) -> None:
         """Denied result can omit retry_after (defaults to None)."""
@@ -45,10 +49,12 @@ class TestRateLimitResult:
             allowed=False,
             limit=100,
             remaining=0,
-            reset=1234567890,
+            reset_at=1234567890.0,
+            request_count=100,
         )
         assert result.allowed is False
         assert result.retry_after is None
+        assert result.request_count == 100
 
     def test_result_is_immutable(self) -> None:
         """Result dataclass is frozen and raises AttributeError on assignment."""
@@ -56,17 +62,19 @@ class TestRateLimitResult:
             allowed=True,
             limit=100,
             remaining=99,
-            reset=1234567890,
+            reset_at=1234567890.0,
+            request_count=1,
         )
         with pytest.raises(AttributeError):
             result.allowed = False
 
     def test_result_remaining_cannot_exceed_limit(self) -> None:
         """Remaining cannot exceed the limit."""
-        result = RateLimitResult(
-            allowed=True,
-            limit=100,
-            remaining=150,
-            reset=1234567890,
-        )
-        assert result.remaining <= result.limit
+        with pytest.raises(ValueError, match="remaining cannot exceed limit"):
+            RateLimitResult(
+                allowed=True,
+                limit=100,
+                remaining=150,
+                reset_at=1234567890.0,
+                request_count=50,
+            )
