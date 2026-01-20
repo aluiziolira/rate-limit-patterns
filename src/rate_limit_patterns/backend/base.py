@@ -15,9 +15,7 @@ class RateLimitBackend(Protocol):
     resetting state, and exposing metrics.
     """
 
-    async def check_and_increment(
-        self, key: str, config: RateLimitConfig
-    ) -> RateLimitResult:
+    async def check_and_increment(self, key: str, config: RateLimitConfig) -> RateLimitResult:
         """Check and increment the rate limit counter for a key.
 
         Args:
