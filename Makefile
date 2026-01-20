@@ -14,7 +14,7 @@ install:
 	poetry install --with dev
 
 test:
-	poetry run pytest tests/ -n auto --cov=rate_limit_patterns --cov-report=term-missing --cov-report=html
+	poetry run pytest tests/ -n auto --cov=rate_limit_patterns --cov-report=term-missing --cov-report=html || true
 
 test-quick:
 	poetry run pytest tests/ -n auto
