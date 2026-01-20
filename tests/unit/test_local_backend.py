@@ -1,5 +1,7 @@
 """Unit tests for Local (in-memory) backend."""
 
+import asyncio
+
 import pytest
 
 from rate_limit_patterns.backend.local import LocalBackend
@@ -121,3 +123,61 @@ class TestLocalBackend:
         assert hasattr(result, "request_count")
         assert hasattr(result, "limit")
         assert result.limit == 100
+
+
+class TestLocalBackendConcurrency:
+    """Concurrency tests for LocalBackend."""
+
+    @pytest.fixture
+    def backend(self) -> LocalBackend:
+        return LocalBackend()
+
+    @pytest.fixture
+    def config(self) -> RateLimitConfig:
+        return RateLimitConfig(
+            algorithm="token_bucket",
+            limit=100,
+            period=60,
+            burst_size=100,
+        )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_requests_respect_limit(
+        self, backend: LocalBackend, config: RateLimitConfig
+    ) -> None:
+        """Concurrent requests don't exceed burst limit."""
+
+        async def make_request() -> bool:
+            result = await backend.check_and_increment("user:123", config)
+            return result.allowed
+
+        # Fire 200 concurrent requests (burst is 100)
+        tasks = [make_request() for _ in range(200)]
+        results = await asyncio.gather(*tasks)
+
+        allowed_count = sum(1 for r in results if r)
+
+        # Should allow exactly 100 (burst_size)
+        assert allowed_count == 100
+
+    @pytest.mark.asyncio
+    async def test_concurrent_different_keys(
+        self, backend: LocalBackend, config: RateLimitConfig
+    ) -> None:
+        """Concurrent requests to different keys are independent."""
+
+        async def make_requests_for_user(user_id: int) -> int:
+            count = 0
+            for _ in range(50):
+                result = await backend.check_and_increment(f"user:{user_id}", config)
+                if result.allowed:
+                    count += 1
+            return count
+
+        # 10 users, each making 50 requests (burst is 100)
+        tasks = [make_requests_for_user(i) for i in range(10)]
+        results = await asyncio.gather(*tasks)
+
+        # Each user should get 50 allowed (under their burst)
+        for count in results:
+            assert count == 50
