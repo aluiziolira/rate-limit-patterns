@@ -63,3 +63,6 @@ tmp/
 temp/
 *.tmp
 *.temp
+
+# === Benchmarks ===
+benchmarks/results/*.json
