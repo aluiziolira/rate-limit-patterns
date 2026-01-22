@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 
 from rate_limit_patterns.backend.base import RateLimitBackend
 from rate_limit_patterns.exceptions import RateLimitExceeded
-from rate_limit_patterns.models import RateLimitConfig
+from rate_limit_patterns.models import AlgorithmType, RateLimitConfig
 
 T = TypeVar("T")
 
@@ -18,6 +18,8 @@ def rate_limit(
     limit: int,
     period: int,
     key: str,
+    key_func: Callable[..., str] | None = None,
+    algorithm: AlgorithmType = "token_bucket",
 ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Decorator to apply rate limiting to an async function.
 
@@ -27,18 +29,48 @@ def rate_limit(
         period: Time window in seconds for the rate limit.
         key: Either a kwarg name to extract from the function call,
              or a static key string if the kwarg is not present.
+        key_func: Optional function to derive the rate-limit key from args/kwargs.
+        algorithm: Algorithm name to use for the rate limit.
 
     Returns:
         A decorator that enforces rate limiting on the decorated function.
+
+    Examples:
+        Use a key extractor for composite arguments:
+
+        @rate_limit(
+            backend=backend,
+            limit=10,
+            period=60,
+            key="unused",
+            key_func=lambda user_id, *_: f"user:{user_id}",
+        )
+        async def handler(user_id: str, payload: dict[str, Any]) -> None:
+            ...
+
+        Override the algorithm explicitly:
+
+        @rate_limit(
+            backend=backend,
+            limit=5,
+            period=60,
+            key="user_id",
+            algorithm="leaky_bucket",
+        )
+        async def handler(user_id: str) -> None:
+            ...
     """
 
     def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         async def wrapper(*args: Any, **kwargs: Any) -> T:
-            effective_key = str(kwargs[key]) if key in kwargs else key
+            if key_func is not None:
+                effective_key = key_func(*args, **kwargs)
+            else:
+                effective_key = str(kwargs[key]) if key in kwargs else key
 
-            # Build rate limit config with token_bucket algorithm
+            # Build rate limit config
             config = RateLimitConfig(
-                algorithm="token_bucket",
+                algorithm=algorithm,
                 limit=limit,
                 period=period,
                 burst_size=limit,

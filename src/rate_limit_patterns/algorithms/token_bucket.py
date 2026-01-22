@@ -70,11 +70,26 @@ class TokenBucketAlgorithm:
         if new_tokens >= 1.0:
             # Consume exactly 1 token
             new_state["tokens"] = new_tokens - 1.0
-            remaining = int(new_state["tokens"])
-            return True, new_state, {"remaining": remaining}
+            tokens_after = new_state["tokens"]
+            allowed = True
+            retry_after: int | None = None
         else:
-            # Deny request - calculate retry_after
-            # Need to wait until we have at least 1 token
-            # Time needed = 1 / tokens_per_second (rounded up to be safe)
-            retry_after = math.ceil(1.0 / config.tokens_per_second)
-            return False, new_state, {"remaining": 0, "retry_after": retry_after}
+            # Deny request - calculate retry_after based on fractional tokens needed
+            tokens_after = new_tokens
+            tokens_needed = 1.0 - tokens_after
+            retry_after = math.ceil(tokens_needed / config.tokens_per_second)
+            allowed = False
+
+        remaining = max(0, int(math.floor(tokens_after)))
+        reset_at = current_time + (burst - tokens_after) / config.tokens_per_second
+        request_count = max(0, int(math.floor(burst - tokens_after)))
+
+        meta: dict[str, Any] = {
+            "remaining": remaining,
+            "reset_at": reset_at,
+            "request_count": request_count,
+        }
+        if not allowed and retry_after is not None:
+            meta["retry_after"] = retry_after
+
+        return allowed, new_state, meta

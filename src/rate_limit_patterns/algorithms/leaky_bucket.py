@@ -63,8 +63,7 @@ class LeakyBucketAlgorithm:
             # Allow request and enqueue it
             new_queue_size = queue_after_leak + 1.0
             allowed = True
-            remaining = max(0, int(math.floor(capacity - new_queue_size)))
-            metadata: dict[str, Any] = {"remaining": remaining}
+            retry_after: int | None = None
         else:
             # Deny request - do not enqueue
             new_queue_size = queue_after_leak
@@ -76,8 +75,18 @@ class LeakyBucketAlgorithm:
                 retry_after = max(1, retry_after)  # Ensure at least 1 second
             else:
                 retry_after = 1
-            remaining = max(0, int(math.floor(capacity - new_queue_size)))
-            metadata = {"remaining": remaining, "retry_after": retry_after}
+
+        remaining = max(0, int(math.floor(capacity - new_queue_size)))
+        reset_at = current_time if rate <= 0 else current_time + (new_queue_size / rate)
+        request_count = max(0, int(math.floor(new_queue_size)))
+
+        metadata: dict[str, Any] = {
+            "remaining": remaining,
+            "reset_at": reset_at,
+            "request_count": request_count,
+        }
+        if not allowed and retry_after is not None:
+            metadata["retry_after"] = retry_after
 
         # Create new state (pure function - don't mutate input)
         new_state: dict[str, Any] = {

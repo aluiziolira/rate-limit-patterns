@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from rate_limit_patterns.backend.base import RateLimitBackend
+import inspect
+from types import TracebackType
+
+from rate_limit_patterns.backend.base import RateLimitBackend, SyncRateLimitBackend
 from rate_limit_patterns.models import RateLimitConfig, RateLimitResult
 
 
@@ -30,8 +33,11 @@ class RateLimiter:
         Args:
             backend: The rate limit backend to use.
             config: The rate limit configuration.
-            key_prefix: Optional prefix for all keys.
+            key_prefix: Optional prefix for all keys (do not set if backend prefixes).
         """
+        backend_prefix = getattr(backend, "key_prefix", "")
+        if isinstance(backend_prefix, str) and backend_prefix and key_prefix:
+            raise ValueError("Configure key_prefix on either RateLimiter or backend, not both.")
         self._backend = backend
         self._config = config
         self._key_prefix = key_prefix
@@ -61,8 +67,28 @@ class RateLimiter:
         full_key = self._build_key(key)
         return await self._backend.check_and_increment(full_key, self._config)
 
+    async def __aenter__(self) -> RateLimiter:
+        initializer = getattr(self._backend, "initialize", None)
+        if initializer is not None:
+            result = initializer()
+            if inspect.isawaitable(result):
+                await result
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        closer = getattr(self._backend, "close", None)
+        if closer is not None:
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+
     async def allow(self, key: str) -> bool:
-        """Check if a key is allowed without consuming resources.
+        """Check if a key is allowed and consume capacity.
 
         This is a convenience method that returns a simple boolean.
 
@@ -83,3 +109,67 @@ class RateLimiter:
         """
         full_key = self._build_key(key)
         await self._backend.reset(full_key)
+
+
+class SyncRateLimiter:
+    """Facade providing a synchronous interface for rate limiting operations."""
+
+    def __init__(
+        self,
+        *,
+        backend: SyncRateLimitBackend,
+        config: RateLimitConfig,
+        key_prefix: str = "",
+    ) -> None:
+        """Initialize the synchronous rate limiter."""
+        backend_prefix = getattr(backend, "key_prefix", "")
+        if isinstance(backend_prefix, str) and backend_prefix and key_prefix:
+            raise ValueError("Configure key_prefix on either RateLimiter or backend, not both.")
+        self._backend = backend
+        self._config = config
+        self._key_prefix = key_prefix
+
+    def _build_key(self, key: str) -> str:
+        if self._key_prefix:
+            return f"{self._key_prefix}{key}"
+        return key
+
+    def check(self, key: str) -> RateLimitResult:
+        """Check the rate limit for a key and increment the counter."""
+        full_key = self._build_key(key)
+        return self._backend.check_and_increment(full_key, self._config)
+
+    def allow(self, key: str) -> bool:
+        """Check if a key is allowed and consume capacity."""
+        result = self.check(key)
+        return result.allowed
+
+    def reset(self, key: str) -> None:
+        """Reset the rate limit state for a key."""
+        full_key = self._build_key(key)
+        self._backend.reset(full_key)
+
+    def __enter__(self) -> SyncRateLimiter:
+        initializer = getattr(self._backend, "initialize", None)
+        if initializer is not None:
+            result = initializer()
+            if inspect.isawaitable(result):
+                raise RuntimeError(
+                    "SyncRateLimiter backend initialize() returned awaitable; "
+                    "use RateLimiter instead."
+                )
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        closer = getattr(self._backend, "close", None)
+        if closer is not None:
+            result = closer()
+            if inspect.isawaitable(result):
+                raise RuntimeError(
+                    "SyncRateLimiter backend close() returned awaitable; use RateLimiter instead."
+                )

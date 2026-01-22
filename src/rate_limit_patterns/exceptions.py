@@ -35,3 +35,15 @@ class RateLimitExceeded(Exception):  # noqa: N818
         if message is None:
             message = f"Rate limit exceeded. Retry after {retry_after} seconds."
         super().__init__(message)
+
+
+class RateLimitBackendError(Exception):
+    """Base class for backend errors."""
+
+
+class RateLimitBackendUnavailableError(RateLimitBackendError):
+    """Raised when a backend cannot be reached or times out."""
+
+
+class RateLimitBackendConfigurationError(RateLimitBackendError):
+    """Raised when backend configuration or initialization is invalid."""
