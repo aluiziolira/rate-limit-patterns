@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from starlette.requests import Request
 from starlette.responses import Response
 
 from rate_limit_patterns.backend.base import RateLimitBackend
-from rate_limit_patterns.models import RateLimitConfig, RateLimitResult
+from rate_limit_patterns.exceptions import RateLimitBackendUnavailableError
+from rate_limit_patterns.middleware.headers import (
+    HeaderStyle,
+    build_rate_limit_header_bytes,
+    build_rate_limit_headers,
+)
+from rate_limit_patterns.models import RateLimitConfig, RateLimitEvent, RateLimitResult
+
+FailureMode = Literal["fail_closed", "fail_open"]
+EventHookFailure = Literal["raise", "log"]
+
+logger = logging.getLogger(__name__)
 
 ASGIApp = Callable[[dict[str, Any], Any, Any], Any]
 Scope = dict[str, Any]
@@ -37,6 +50,10 @@ class RateLimitMiddleware:
         backend: RateLimitBackend,
         config: RateLimitConfig,
         key_extractor: Callable[[Request], str],
+        failure_mode: FailureMode = "fail_closed",
+        event_hook: Callable[[RateLimitEvent], None] | None = None,
+        event_hook_failure: EventHookFailure = "raise",
+        header_style: HeaderStyle = "x",
     ) -> None:
         """Initialize the rate limit middleware.
 
@@ -45,11 +62,19 @@ class RateLimitMiddleware:
             backend: Rate limit backend for checking limits.
             config: Rate limit configuration.
             key_extractor: Callable that extracts a rate limit key from a request.
+            failure_mode: Behavior when backend is unavailable.
+            event_hook: Optional callback for observability events.
+            event_hook_failure: Behavior when event_hook raises.
+            header_style: Which rate-limit header style to emit.
         """
         self.app = app
         self.backend = backend
         self.config = config
         self.key_extractor = key_extractor
+        self.failure_mode = failure_mode
+        self._event_hook = event_hook
+        self._event_hook_failure = event_hook_failure
+        self._header_style = header_style
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Handle an ASGI request.
@@ -68,40 +93,76 @@ class RateLimitMiddleware:
 
         request = Request(scope, receive)
         key = self.key_extractor(request)
-        result = await self.backend.check_and_increment(key, self.config)
+        start = time.perf_counter()
+        try:
+            result = await self.backend.check_and_increment(key, self.config)
+        except RateLimitBackendUnavailableError:
+            if self.failure_mode == "fail_open":
+                await self.app(scope, receive, send)
+                return
+            await self._send_backend_unavailable_response(scope, receive, send)
+            return
+        latency_ms = (time.perf_counter() - start) * 1000
+        self._emit_event(result, latency_ms)
 
         if not result.allowed:
-            await self._send_rate_limit_response(result, send)
+            await self._send_rate_limit_response(scope, receive, send, result)
             return
 
         await self._send_through_request(scope, receive, send, result)
 
-    async def _send_rate_limit_response(self, result: RateLimitResult, send: Send) -> None:
+    async def _send_rate_limit_response(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        result: RateLimitResult,
+    ) -> None:
         """Send a 429 rate limit exceeded response.
 
         Args:
+            scope: ASGI scope dictionary.
+            receive: ASGI receive callable.
             result: The rate limit check result.
             send: ASGI send callable.
         """
-        headers: list[tuple[str, str]] = [
-            ("X-RateLimit-Limit", str(result.limit)),
-            ("X-RateLimit-Remaining", str(result.remaining)),
-        ]
-        if result.retry_after is not None:
-            headers.append(("Retry-After", str(result.retry_after)))
-
         response = Response(
             content="Rate limit exceeded",
             status_code=429,
-            headers=dict(headers),
+            headers=build_rate_limit_headers(result, header_style=self._header_style),
         )
+        await response(scope=scope, receive=receive, send=send)
 
-        async def receive() -> dict[str, Any]:
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        await response(
-            scope={"type": "http", "method": "GET", "path": "/"}, receive=receive, send=send
+    async def _send_backend_unavailable_response(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        response = Response(
+            content="Rate limit backend unavailable",
+            status_code=503,
         )
+        await response(scope=scope, receive=receive, send=send)
+
+    def _emit_event(self, result: RateLimitResult, latency_ms: float) -> None:
+        if self._event_hook is None:
+            return
+        event = RateLimitEvent(
+            algorithm=self.config.algorithm,
+            allowed=result.allowed,
+            remaining=result.remaining,
+            retry_after=result.retry_after,
+            backend_type=type(self.backend).__name__,
+            latency_ms=latency_ms,
+        )
+        if self._event_hook_failure == "raise":
+            self._event_hook(event)
+            return
+        try:
+            self._event_hook(event)
+        except Exception:
+            logger.exception("Rate limit event hook failed")
 
     async def _send_through_request(
         self, scope: Scope, receive: Receive, send: Send, result: RateLimitResult
@@ -121,10 +182,7 @@ class RateLimitMiddleware:
             if message["type"] == "http.response.start" and not headers_sent:
                 headers = list(message.get("headers", []))
                 headers.extend(
-                    [
-                        (b"X-RateLimit-Limit", str(result.limit).encode()),
-                        (b"X-RateLimit-Remaining", str(result.remaining).encode()),
-                    ]
+                    build_rate_limit_header_bytes(result, header_style=self._header_style)
                 )
                 message = {**message, "headers": headers}
                 headers_sent = True
