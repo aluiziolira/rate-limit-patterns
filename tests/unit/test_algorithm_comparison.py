@@ -24,6 +24,7 @@ class TestAlgorithmComparison:
             limit=10,
             period=60,
             burst_size=10,
+            cleanup_interval=0,
         )
 
         allowed_count = 0
@@ -43,6 +44,7 @@ class TestAlgorithmComparison:
             limit=10,
             period=60,
             burst_size=50,  # High burst
+            cleanup_interval=0,
         )
 
         allowed_count = 0
@@ -61,6 +63,7 @@ class TestAlgorithmComparison:
             limit=10,
             period=60,
             # burst_size ignored for sliding window
+            cleanup_interval=0,
         )
 
         allowed_count = 0

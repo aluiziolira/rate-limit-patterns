@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncGenerator
 
@@ -34,6 +35,26 @@ def config() -> RateLimitConfig:
     )
 
 
+@pytest.fixture
+def sliding_window_config() -> RateLimitConfig:
+    """Create a sliding window configuration for testing."""
+    return RateLimitConfig(
+        algorithm="sliding_window",
+        limit=3,
+        period=2,
+    )
+
+
+@pytest.fixture
+def leaky_bucket_config() -> RateLimitConfig:
+    """Create a leaky bucket configuration for testing."""
+    return RateLimitConfig(
+        algorithm="leaky_bucket",
+        limit=2,
+        period=2,
+    )
+
+
 @pytest.mark.asyncio
 async def test_rate_limiting_works(backend: RedisBackend, config: RateLimitConfig) -> None:
     """Test that rate limiting works correctly with real Redis."""
@@ -62,6 +83,28 @@ async def test_rate_limiting_works(backend: RedisBackend, config: RateLimitConfi
 
 
 @pytest.mark.asyncio
+async def test_lazy_initialize(redis_url: str, config: RateLimitConfig) -> None:
+    """check_and_increment initializes scripts lazily."""
+    backend = RedisBackend(url=redis_url, key_prefix="test:")
+    try:
+        result = await backend.check_and_increment("lazy_user", config)
+        assert result.allowed is True
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_initialize_close_idempotent(redis_url: str) -> None:
+    """initialize/close can be called multiple times safely."""
+    backend = RedisBackend(url=redis_url, key_prefix="test:")
+    await backend.initialize()
+    await backend.initialize()
+    await backend.close()
+    await backend.initialize()
+    await backend.close()
+
+
+@pytest.mark.asyncio
 async def test_shared_state_across_clients(redis_url: str, config: RateLimitConfig) -> None:
     """Test that state is shared across different Redis backend instances."""
     key = "shared_key"
@@ -74,6 +117,7 @@ async def test_shared_state_across_clients(redis_url: str, config: RateLimitConf
     await backend2.initialize()
 
     try:
+        await backend1.reset(key)
         # Make a request with backend1
         result1 = await backend1.check_and_increment(key, config)
         assert result1.allowed is True
@@ -95,3 +139,74 @@ async def test_shared_state_across_clients(redis_url: str, config: RateLimitConf
     finally:
         await backend1.close()
         await backend2.close()
+
+
+@pytest.mark.asyncio
+async def test_sliding_window_limits(
+    backend: RedisBackend, sliding_window_config: RateLimitConfig
+) -> None:
+    """Sliding window enforces limit and resets after window passes."""
+    key = "sliding_user"
+
+    for _ in range(sliding_window_config.limit):
+        result = await backend.check_and_increment(key, sliding_window_config)
+        assert result.allowed is True
+
+    result = await backend.check_and_increment(key, sliding_window_config)
+    assert result.allowed is False
+    assert result.retry_after is not None
+    assert result.reset_at is not None
+
+    await asyncio.sleep(sliding_window_config.period + 0.2)
+
+    result = await backend.check_and_increment(key, sliding_window_config)
+    assert result.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_leaky_bucket_limits(
+    backend: RedisBackend, leaky_bucket_config: RateLimitConfig
+) -> None:
+    """Leaky bucket enforces queue capacity and drains over time."""
+    key = "leaky_user"
+
+    result = await backend.check_and_increment(key, leaky_bucket_config)
+    assert result.allowed is True
+
+    result = await backend.check_and_increment(key, leaky_bucket_config)
+    assert result.allowed is True
+
+    result = await backend.check_and_increment(key, leaky_bucket_config)
+    assert result.allowed is False
+    assert result.retry_after is not None
+    assert result.reset_at is not None
+
+    await asyncio.sleep(leaky_bucket_config.period + 0.2)
+
+    result = await backend.check_and_increment(key, leaky_bucket_config)
+    assert result.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_token_bucket_refill_over_time(backend: RedisBackend) -> None:
+    """Token bucket refills based on Redis server time."""
+    config = RateLimitConfig(
+        algorithm="token_bucket",
+        limit=1,
+        period=1,
+        burst_size=1,
+    )
+    key = "token_refill_user"
+
+    result = await backend.check_and_increment(key, config)
+    assert result.allowed is True
+
+    result = await backend.check_and_increment(key, config)
+    assert result.allowed is False
+    assert result.retry_after is not None
+    assert result.reset_at is not None
+
+    await asyncio.sleep(config.period + 0.2)
+
+    result = await backend.check_and_increment(key, config)
+    assert result.allowed is True

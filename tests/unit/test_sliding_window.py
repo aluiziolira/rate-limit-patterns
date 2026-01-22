@@ -40,6 +40,8 @@ class TestSlidingWindowAlgorithm:
         assert allowed is True
         assert new_state["count"] == 1
         assert meta["remaining"] == 99
+        assert meta["request_count"] == 1
+        assert meta["reset_at"] == 1060.0
 
     def test_allows_requests_up_to_limit(
         self, algorithm: SlidingWindowAlgorithm, config: RateLimitConfig
@@ -69,6 +71,8 @@ class TestSlidingWindowAlgorithm:
         allowed, state, meta = algorithm.compute(state, config, current_time)
         assert allowed is False
         assert meta["retry_after"] > 0
+        assert meta["request_count"] == config.limit
+        assert meta["reset_at"] >= current_time
 
     def test_old_requests_expire(
         self, algorithm: SlidingWindowAlgorithm, config: RateLimitConfig
@@ -85,6 +89,7 @@ class TestSlidingWindowAlgorithm:
 
         assert allowed is True
         assert new_state["count"] == 1  # Only the new request
+        assert meta["request_count"] == 1
 
     def test_window_slides_correctly(
         self, algorithm: SlidingWindowAlgorithm, config: RateLimitConfig
@@ -99,6 +104,37 @@ class TestSlidingWindowAlgorithm:
         # At 1060 (window start), first request expired
         allowed, _, meta = algorithm.compute(state, config, 1060.0)
         assert allowed is True
+
+    def test_boundary_excludes_exact_cutoff(
+        self, algorithm: SlidingWindowAlgorithm, config: RateLimitConfig
+    ) -> None:
+        """Requests at the exact cutoff are excluded."""
+        state = {"requests": [940.0], "count": 1}
+
+        allowed, new_state, meta = algorithm.compute(state, config, 1000.0)
+
+        assert allowed is True
+        assert new_state["count"] == 1
+        assert meta["request_count"] == 1
+
+    def test_denied_contract_invariants(
+        self, algorithm: SlidingWindowAlgorithm, config: RateLimitConfig
+    ) -> None:
+        """Denied results include retry_after and monotonic reset_at."""
+        state = algorithm.initial_state(config)
+        current_time = 1000.0
+
+        for _ in range(config.limit):
+            _, state, _ = algorithm.compute(state, config, current_time)
+
+        allowed, new_state, meta1 = algorithm.compute(state, config, current_time)
+        allowed2, _, meta2 = algorithm.compute(new_state, config, current_time)
+
+        assert allowed is False
+        assert allowed2 is False
+        assert meta1["remaining"] == 0
+        assert meta1["retry_after"] is not None
+        assert meta2["reset_at"] >= meta1["reset_at"]
 
     def test_no_burst_allowed(
         self, algorithm: SlidingWindowAlgorithm, config: RateLimitConfig

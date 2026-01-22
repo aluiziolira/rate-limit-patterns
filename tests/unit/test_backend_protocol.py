@@ -16,7 +16,7 @@ def test_backend_is_runtime_checkable() -> None:
 
     class FakeBackend:
         async def check_and_increment(
-            self, key: str, config: RateLimitConfig
+            self, key: str, config: RateLimitConfig, *, now: float | None = None
         ) -> RateLimitResult: ...
 
         async def reset(self, key: str) -> None: ...

@@ -67,3 +67,14 @@ class TestRateLimitResult:
         )
         with pytest.raises(AttributeError):
             result.allowed = False
+
+    def test_negative_request_count_raises(self) -> None:
+        """request_count cannot be negative."""
+        with pytest.raises(ValueError, match="request_count"):
+            RateLimitResult(
+                allowed=True,
+                limit=100,
+                remaining=1,
+                reset_at=1234567890.0,
+                request_count=-1,
+            )

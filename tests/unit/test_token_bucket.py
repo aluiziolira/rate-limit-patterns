@@ -50,6 +50,8 @@ class TestTokenBucketAlgorithm:
         assert allowed is True
         assert new_state["tokens"] == 99.0
         assert meta["remaining"] == 99
+        assert meta["request_count"] == 101
+        assert meta["reset_at"] == pytest.approx(1060.6, rel=0.01)
 
     def test_denies_request_when_no_tokens(
         self, algorithm: TokenBucketAlgorithm, config: RateLimitConfig
@@ -60,6 +62,7 @@ class TestTokenBucketAlgorithm:
 
         assert allowed is False
         assert meta["retry_after"] > 0
+        assert meta["reset_at"] is not None
 
     def test_tokens_refill_over_time(
         self, algorithm: TokenBucketAlgorithm, config: RateLimitConfig
@@ -108,3 +111,37 @@ class TestTokenBucketAlgorithm:
         result2 = algorithm.compute(state, config, 1001.0)
 
         assert result1 == result2
+
+    def test_retry_after_accounts_for_fractional_tokens(
+        self, algorithm: TokenBucketAlgorithm
+    ) -> None:
+        """Retry-after accounts for fractional tokens needed."""
+        config = RateLimitConfig(algorithm="token_bucket", limit=1, period=2)
+        state = {"tokens": 0.75, "last_refill": 1000.0}
+
+        allowed, _, meta = algorithm.compute(state, config, 1000.0)
+
+        assert allowed is False
+        assert meta["retry_after"] == 1
+
+        slow_config = RateLimitConfig(algorithm="token_bucket", limit=1, period=4)
+        slow_state = {"tokens": 0.6, "last_refill": 1000.0}
+
+        allowed, _, meta = algorithm.compute(slow_state, slow_config, 1000.0)
+
+        assert allowed is False
+        assert meta["retry_after"] == 2
+
+    def test_denied_contract_invariants(
+        self, algorithm: TokenBucketAlgorithm, config: RateLimitConfig
+    ) -> None:
+        """Denied results include retry_after and monotonic reset_at."""
+        state = {"tokens": 0.0, "last_refill": 1000.0}
+        allowed, new_state, meta1 = algorithm.compute(state, config, 1000.0)
+        allowed2, _, meta2 = algorithm.compute(new_state, config, 1000.0)
+
+        assert allowed is False
+        assert allowed2 is False
+        assert meta1["remaining"] >= 0
+        assert meta1["retry_after"] is not None
+        assert meta2["reset_at"] >= meta1["reset_at"]

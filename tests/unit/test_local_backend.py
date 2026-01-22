@@ -1,6 +1,8 @@
 """Unit tests for Local (in-memory) backend."""
 
 import asyncio
+import time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -24,6 +26,7 @@ class TestLocalBackend:
             limit=100,
             period=60,
             burst_size=200,
+            cleanup_interval=0,
         )
 
     @pytest.mark.asyncio
@@ -122,6 +125,118 @@ class TestLocalBackend:
         assert hasattr(result, "limit")
         assert result.limit == 100
 
+    @pytest.mark.asyncio
+    async def test_expired_state_reinitializes(self, backend: LocalBackend) -> None:
+        """Expired state resets to initial capacity on next check."""
+        config = RateLimitConfig(
+            algorithm="token_bucket",
+            limit=1,
+            period=1,
+            burst_size=1,
+            cleanup_interval=0.1,
+        )
+
+        await backend.check_and_increment("user:123", config, now=1000.0)
+        result = await backend.check_and_increment("user:123", config, now=1002.0)
+
+        assert result.allowed is True
+        assert result.remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_expired_keys(self) -> None:
+        """Cleanup evicts expired keys under churn."""
+        backend = LocalBackend()
+        config = RateLimitConfig(
+            algorithm="token_bucket",
+            limit=1,
+            period=1,
+            burst_size=1,
+            cleanup_interval=0.1,
+        )
+
+        await backend.check_and_increment("user:1", config, now=time.time() - 3600)
+        assert "user:1" in backend._state
+        await backend.check_and_increment("user:2", config)
+        assert backend._cleanup_task is not None
+
+        await asyncio.sleep(0.2)
+        assert "user:1" not in backend._state
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_background_cleanup_lifecycle(self) -> None:
+        """Background cleanup task removes expired keys and stops on close."""
+        backend = LocalBackend()
+        config = RateLimitConfig(
+            algorithm="token_bucket",
+            limit=1,
+            period=1,
+            burst_size=1,
+            cleanup_interval=0.05,
+        )
+
+        await backend.check_and_increment("user:expired", config, now=time.time() - 3600)
+        assert "user:expired" in backend._state
+
+        await asyncio.sleep(0.15)
+        assert "user:expired" not in backend._state
+
+        await backend.close()
+        assert backend._cleanup_task is None or backend._cleanup_task.done()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_logs_exceptions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Cleanup loop logs exceptions instead of swallowing silently."""
+        backend = LocalBackend()
+        config = RateLimitConfig(
+            algorithm="token_bucket",
+            limit=1,
+            period=1,
+            burst_size=1,
+            cleanup_interval=0.01,
+        )
+        logger = MagicMock()
+        monkeypatch.setattr("rate_limit_patterns.backend.local.logger", logger)
+        seen = asyncio.Event()
+
+        async def boom(_now: float) -> None:
+            seen.set()
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(backend, "_cleanup_expired", boom)
+
+        try:
+            await backend.check_and_increment("user:log", config)
+            await asyncio.wait_for(seen.wait(), timeout=1.0)
+            assert logger.debug.called
+        finally:
+            await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_monotonic_clock_is_stable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Monotonic clock protects against wall-clock regressions."""
+        monotonic_values = iter([100.0, 101.0, 102.0])
+        wall_values = iter([1000.0, 900.0, 800.0])
+
+        monkeypatch.setattr(time, "monotonic", lambda: next(monotonic_values, 102.0))
+        monkeypatch.setattr(time, "time", lambda: next(wall_values, 800.0))
+
+        backend = LocalBackend()
+        config = RateLimitConfig(
+            algorithm="token_bucket",
+            limit=1,
+            period=10,
+            burst_size=1,
+            cleanup_interval=0,
+        )
+
+        result1 = await backend.check_and_increment("user:clock", config)
+        result2 = await backend.check_and_increment("user:clock", config)
+
+        assert result2.reset_at is not None
+        assert result1.reset_at is not None
+        assert result2.reset_at >= result1.reset_at
+
 
 class TestLocalBackendConcurrency:
     """Concurrency tests for LocalBackend."""
@@ -137,6 +252,7 @@ class TestLocalBackendConcurrency:
             limit=100,
             period=60,
             burst_size=100,
+            cleanup_interval=0,
         )
 
     @pytest.mark.asyncio
@@ -179,3 +295,26 @@ class TestLocalBackendConcurrency:
         # Each user should get 50 allowed (under their burst)
         for count in results:
             assert count == 50
+
+    @pytest.mark.asyncio
+    async def test_concurrent_many_keys(
+        self, backend: LocalBackend, config: RateLimitConfig
+    ) -> None:
+        """Many keys can be processed concurrently without violating limits."""
+        keys = [f"user:{i}" for i in range(50)]
+        allowed_counts = dict.fromkeys(keys, 0)
+        semaphore = asyncio.Semaphore(25)
+        counter_lock = asyncio.Lock()
+
+        async def hit(key: str) -> None:
+            async with semaphore:
+                result = await backend.check_and_increment(key, config)
+                if result.allowed:
+                    async with counter_lock:
+                        allowed_counts[key] += 1
+
+        tasks = [hit(key) for key in keys for _ in range(20)]
+        await asyncio.gather(*tasks)
+
+        for key in keys:
+            assert allowed_counts[key] == 20

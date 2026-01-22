@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from rate_limit_patterns.models import RateLimitConfig
@@ -54,3 +56,30 @@ class TestRateLimitConfig:
         """Config calculates tokens per second."""
         config = RateLimitConfig(algorithm="token_bucket", limit=100, period=60)
         assert config.tokens_per_second == pytest.approx(100 / 60)
+
+    def test_sliding_window_warns_above_threshold(self) -> None:
+        """Sliding window config warns when limit exceeds threshold."""
+        threshold = RateLimitConfig.SLIDING_WINDOW_LIMIT_WARNING_THRESHOLD
+        with pytest.warns(RuntimeWarning, match="Sliding window log limits"):
+            RateLimitConfig(algorithm="sliding_window", limit=threshold + 1, period=60)
+
+    def test_sliding_window_no_warning_below_threshold(self) -> None:
+        """Sliding window config does not warn below threshold."""
+        threshold = RateLimitConfig.SLIDING_WINDOW_LIMIT_WARNING_THRESHOLD
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            RateLimitConfig(algorithm="sliding_window", limit=threshold, period=60)
+        assert not caught
+
+    def test_sliding_window_warning_can_be_suppressed(self) -> None:
+        """Sliding window warning can be suppressed explicitly."""
+        threshold = RateLimitConfig.SLIDING_WINDOW_LIMIT_WARNING_THRESHOLD
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            RateLimitConfig(
+                algorithm="sliding_window",
+                limit=threshold + 1,
+                period=60,
+                suppress_warnings=True,
+            )
+        assert not caught

@@ -40,6 +40,8 @@ class TestLeakyBucketAlgorithm:
 
         assert allowed is True
         assert new_state["queue_size"] == 1
+        assert meta["request_count"] == 1
+        assert meta["reset_at"] == pytest.approx(1000.6, rel=0.01)
 
     def test_denies_when_queue_full(
         self, algorithm: LeakyBucketAlgorithm, config: RateLimitConfig
@@ -50,6 +52,7 @@ class TestLeakyBucketAlgorithm:
 
         assert allowed is False
         assert meta["retry_after"] > 0
+        assert meta["request_count"] == 200
 
     def test_queue_leaks_over_time(
         self, algorithm: LeakyBucketAlgorithm, config: RateLimitConfig
@@ -63,6 +66,7 @@ class TestLeakyBucketAlgorithm:
 
         assert allowed is True
         assert new_state["queue_size"] == 1  # Queue drained + new request
+        assert meta["request_count"] == 1
 
     def test_smooth_output_rate(
         self, algorithm: LeakyBucketAlgorithm, config: RateLimitConfig
@@ -89,3 +93,18 @@ class TestLeakyBucketAlgorithm:
         allowed, new_state, _ = algorithm.compute(state, config, 10000.0)
 
         assert new_state["queue_size"] >= 0
+
+    def test_denied_contract_invariants(
+        self, algorithm: LeakyBucketAlgorithm, config: RateLimitConfig
+    ) -> None:
+        """Denied results include retry_after and monotonic reset_at."""
+        state = {"queue_size": 200.0, "last_leak": 1000.0}
+
+        allowed, new_state, meta1 = algorithm.compute(state, config, 1000.0)
+        allowed2, _, meta2 = algorithm.compute(new_state, config, 1000.0)
+
+        assert allowed is False
+        assert allowed2 is False
+        assert meta1["remaining"] >= 0
+        assert meta1["retry_after"] is not None
+        assert meta2["reset_at"] >= meta1["reset_at"]
