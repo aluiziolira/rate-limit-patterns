@@ -1,6 +1,12 @@
 # Rate Limit Patterns
 
-**Production-grade rate limiting primitives that treat distributed atomicity and concurrency correctness as first-class concerns.**
+> **Production-grade rate limiting primitives that treat distributed atomicity and concurrency correctness as first-class concerns.**
+
+![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)
+![Type Checked](https://img.shields.io/badge/type--checked-mypy-blue)
+![Redis](https://img.shields.io/badge/redis-5.0+-red.svg)
+![Performance](https://img.shields.io/badge/throughput-215K%20RPS-green)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 This library provides a suite of algorithms to enforce quotas with **microsecond-scale in-process overhead** and a **Redis Lua-backed atomic path** for robust multi-instance deployments.
 
@@ -95,12 +101,12 @@ async def main():
     await backend.initialize()
     # 3. Check limit (Atomic operation)
     result = await limiter.check("user:123")
-    
+
     if result.allowed:
         print(f"Allowed! Remaining: {result.remaining}")
     else:
         print(f"Blocked! Retry in: {result.retry_after}s")
-        
+
     await backend.close()
 
 if __name__ == "__main__":
