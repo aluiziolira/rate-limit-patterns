@@ -27,10 +27,10 @@ flowchart LR
     D --> G[RateLimitResult]
     G --> H[Headers / Exception]
 
-    subgraph Redis Keys
-        F --> TB[Token Bucket: hash]
-        F --> LB[Leaky Bucket: hash]
-        F --> SW[Sliding Window Log: zset + seq key (same hash tag)]
+    subgraph redis_keys["Redis Keys"]
+        F --> TB["Token Bucket: hash"]
+        F --> LB["Leaky Bucket: hash"]
+        F --> SW["Sliding Window Log: zset + seq key (same hash tag)"]
     end
 ```
 
