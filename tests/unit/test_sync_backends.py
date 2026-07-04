@@ -184,7 +184,7 @@ def test_sync_local_sliding_window_uses_period() -> None:
         period=10,
     )
 
-    ttl = backend._ttl_for(config)
+    ttl = backend._core._ttl_for(config)
 
     assert ttl == 10.0
 
@@ -193,10 +193,10 @@ def test_sync_local_now_and_reset_time_conversion() -> None:
     """_now and _to_wall_time behave deterministically with overrides."""
     backend = SyncLocalBackend()
     now_wall = time.time()
-    now_mono, now_wall_result = backend._now(now_wall)
+    now_mono, now_wall_result = backend._core.now(now_wall)
 
     assert now_wall_result == now_wall
-    assert backend._to_wall_time(None, now_mono, now_wall_result) is None
+    assert backend._core._to_wall_time(None, now_mono, now_wall_result) is None
 
 
 def test_sync_rate_limiter_facade() -> None:

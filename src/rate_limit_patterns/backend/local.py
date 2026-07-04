@@ -6,23 +6,16 @@ import asyncio
 import contextlib
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any
 
-from rate_limit_patterns.algorithms.base import RateLimitAlgorithm
-from rate_limit_patterns.algorithms.leaky_bucket import LeakyBucketAlgorithm
-from rate_limit_patterns.algorithms.sliding_window import SlidingWindowAlgorithm
-from rate_limit_patterns.algorithms.token_bucket import TokenBucketAlgorithm
-from rate_limit_patterns.models import AlgorithmType, RateLimitConfig, RateLimitResult
+from rate_limit_patterns.backend._local_shared import (
+    LOCK_STRIPES,
+    LocalStateCore,
+    _LocalEntry,
+)
+from rate_limit_patterns.models import RateLimitConfig, RateLimitResult
 
-_LOCK_STRIPES = 64
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class _LocalEntry:
-    state: dict[str, Any]
-    expires_at: float
 
 
 class LocalBackend:
@@ -30,20 +23,19 @@ class LocalBackend:
 
     def __init__(self) -> None:
         """Initialize the local backend."""
-        self._locks = [asyncio.Lock() for _ in range(_LOCK_STRIPES)]
+        self._locks = [asyncio.Lock() for _ in range(LOCK_STRIPES)]
         self._cleanup_lock = asyncio.Lock()
         self._init_lock = asyncio.Lock()
         self._cleanup_interval: float | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._cleanup_event = asyncio.Event()
         self._running = False
-        self._state: dict[str, _LocalEntry] = {}
-        self._algorithms: dict[AlgorithmType, RateLimitAlgorithm] = {
-            "token_bucket": TokenBucketAlgorithm(),
-            "sliding_window": SlidingWindowAlgorithm(),
-            "leaky_bucket": LeakyBucketAlgorithm(),
-        }
-        self._time_offset = time.time() - time.monotonic()
+        self._core = LocalStateCore()
+
+    @property
+    def _state(self) -> dict[str, _LocalEntry]:
+        """Key→entry map (exposed for white-box tests)."""
+        return self._core.state
 
     async def check_and_increment(
         self,
@@ -62,67 +54,19 @@ class LocalBackend:
         Returns:
             RateLimitResult indicating if the request is allowed and state.
         """
-        algorithm = self._algorithms.get(config.algorithm)
-        if algorithm is None:
-            msg = (
-                f"Unknown algorithm: {config.algorithm}. "
-                f"Supported algorithms: {list(self._algorithms.keys())}"
-            )
-            raise ValueError(msg)
-
-        now_mono, now_wall = self._now(now)
+        algorithm = self._core.algorithm_for(config)
+        now_mono, now_wall = self._core.now(now)
         self._update_cleanup_interval(config.cleanup_interval)
         if config.cleanup_interval > 0:
             await self._start_cleanup_task()
 
-        lock = self._lock_for_key(key)
-        async with lock:
-            entry = self._state.get(key)
-            if entry is None or entry.expires_at <= now_mono:
-                state = algorithm.initial_state(config)
-            else:
-                state = entry.state
+        async with self._lock_for_key(key):
+            allowed, metadata = self._core.apply(algorithm, key, config, now_mono)
 
-            allowed, new_state, metadata = algorithm.compute(state, config, now_mono)
-            expires_at = now_mono + self._ttl_for(config)
-            self._state[key] = _LocalEntry(state=new_state, expires_at=expires_at)
-
-        reset_at = self._to_wall_time(metadata.get("reset_at"), now_mono, now_wall)
-        return RateLimitResult(
-            allowed=allowed,
-            remaining=metadata["remaining"],
-            limit=config.limit,
-            retry_after=metadata.get("retry_after"),
-            reset_at=reset_at,
-            request_count=metadata.get("request_count", 0),
-        )
+        return self._core.build_result(config, allowed, metadata, now_mono, now_wall)
 
     def _lock_for_key(self, key: str) -> asyncio.Lock:
         return self._locks[hash(key) % len(self._locks)]
-
-    def _ttl_for(self, config: RateLimitConfig) -> float:
-        if config.algorithm == "sliding_window":
-            ttl = float(config.period)
-        else:
-            capacity = config.burst_size if config.burst_size is not None else config.limit
-            rate = config.tokens_per_second
-            ttl = capacity / rate if rate > 0 else 1.0
-        return max(1.0, ttl)
-
-    def _now(self, now: float | None) -> tuple[float, float]:
-        if now is None:
-            now_mono = time.monotonic()
-            now_wall = self._time_offset + now_mono
-        else:
-            now_wall = now
-            now_mono = now - self._time_offset
-        return now_mono, now_wall
-
-    @staticmethod
-    def _to_wall_time(reset_at: float | None, now_mono: float, now_wall: float) -> float | None:
-        if reset_at is None:
-            return None
-        return now_wall + (reset_at - now_mono)
 
     def _update_cleanup_interval(self, cleanup_interval: float) -> None:
         if cleanup_interval <= 0:
@@ -173,12 +117,9 @@ class LocalBackend:
 
     async def _cleanup_expired(self, now_mono: float) -> None:
         async with self._cleanup_lock:
-            for key in list(self._state.keys()):
-                lock = self._lock_for_key(key)
-                async with lock:
-                    entry = self._state.get(key)
-                    if entry is not None and entry.expires_at <= now_mono:
-                        self._state.pop(key, None)
+            for key in self._core.snapshot_keys():
+                async with self._lock_for_key(key):
+                    self._core.drop_if_expired(key, now_mono)
 
     async def close(self) -> None:
         """Stop background cleanup task."""
@@ -196,9 +137,8 @@ class LocalBackend:
         Args:
             key: Unique identifier for the rate limit to reset.
         """
-        lock = self._lock_for_key(key)
-        async with lock:
-            self._state.pop(key, None)
+        async with self._lock_for_key(key):
+            self._core.reset(key)
 
     async def get_metrics(self, key: str) -> dict[str, Any]:
         """Get metrics for a specific key.
@@ -209,12 +149,6 @@ class LocalBackend:
         Returns:
             Dictionary containing metrics for the key.
         """
-        now_mono, _ = self._now(None)
-        lock = self._lock_for_key(key)
-        async with lock:
-            entry = self._state.get(key)
-            if entry is None or entry.expires_at <= now_mono:
-                self._state.pop(key, None)
-                return {}
-            # Return shallow copy to prevent external mutation
-            return dict(entry.state)
+        now_mono, _ = self._core.now(None)
+        async with self._lock_for_key(key):
+            return self._core.metrics_snapshot(key, now_mono)

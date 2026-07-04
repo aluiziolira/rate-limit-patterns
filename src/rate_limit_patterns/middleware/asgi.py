@@ -2,27 +2,26 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import Response
 
 from rate_limit_patterns.backend.base import RateLimitBackend
 from rate_limit_patterns.exceptions import RateLimitBackendUnavailableError
+from rate_limit_patterns.middleware._shared import (
+    EventHookFailure,
+    FailureMode,
+    emit_rate_limit_event,
+)
 from rate_limit_patterns.middleware.headers import (
     HeaderStyle,
     build_rate_limit_header_bytes,
     build_rate_limit_headers,
 )
 from rate_limit_patterns.models import RateLimitConfig, RateLimitEvent, RateLimitResult
-
-FailureMode = Literal["fail_closed", "fail_open"]
-EventHookFailure = Literal["raise", "log"]
-
-logger = logging.getLogger(__name__)
 
 ASGIApp = Callable[[dict[str, Any], Any, Any], Any]
 Scope = dict[str, Any]
@@ -146,23 +145,14 @@ class RateLimitMiddleware:
         await response(scope=scope, receive=receive, send=send)
 
     def _emit_event(self, result: RateLimitResult, latency_ms: float) -> None:
-        if self._event_hook is None:
-            return
-        event = RateLimitEvent(
+        emit_rate_limit_event(
+            self._event_hook,
+            self._event_hook_failure,
             algorithm=self.config.algorithm,
-            allowed=result.allowed,
-            remaining=result.remaining,
-            retry_after=result.retry_after,
+            result=result,
             backend_type=type(self.backend).__name__,
             latency_ms=latency_ms,
         )
-        if self._event_hook_failure == "raise":
-            self._event_hook(event)
-            return
-        try:
-            self._event_hook(event)
-        except Exception:
-            logger.exception("Rate limit event hook failed")
 
     async def _send_through_request(
         self, scope: Scope, receive: Receive, send: Send, result: RateLimitResult

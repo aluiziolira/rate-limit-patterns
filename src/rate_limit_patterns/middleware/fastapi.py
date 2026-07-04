@@ -1,22 +1,20 @@
 """FastAPI dependency for rate limiting."""
 
-import logging
 import time
 from collections.abc import Callable
-from typing import Literal
 
 from fastapi import HTTPException, Response
 from starlette.requests import Request
 
 from rate_limit_patterns.backend.base import RateLimitBackend
 from rate_limit_patterns.exceptions import RateLimitBackendUnavailableError
+from rate_limit_patterns.middleware._shared import (
+    EventHookFailure,
+    FailureMode,
+    emit_rate_limit_event,
+)
 from rate_limit_patterns.middleware.headers import HeaderStyle, build_rate_limit_headers
 from rate_limit_patterns.models import RateLimitConfig, RateLimitEvent, RateLimitResult
-
-FailureMode = Literal["fail_closed", "fail_open"]
-EventHookFailure = Literal["raise", "log"]
-
-logger = logging.getLogger(__name__)
 
 
 def _default_key_extractor(request: Request) -> str:
@@ -87,23 +85,14 @@ class RateLimitDependency:
         return result
 
     def _emit_event(self, result: RateLimitResult, latency_ms: float) -> None:
-        if self._event_hook is None:
-            return
-        event = RateLimitEvent(
+        emit_rate_limit_event(
+            self._event_hook,
+            self._event_hook_failure,
             algorithm=self._config.algorithm,
-            allowed=result.allowed,
-            remaining=result.remaining,
-            retry_after=result.retry_after,
+            result=result,
             backend_type=type(self._backend).__name__,
             latency_ms=latency_ms,
         )
-        if self._event_hook_failure == "raise":
-            self._event_hook(event)
-            return
-        try:
-            self._event_hook(event)
-        except Exception:
-            logger.exception("Rate limit event hook failed")
 
 
 def create_rate_limit_dependency(
