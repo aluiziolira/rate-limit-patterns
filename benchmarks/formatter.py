@@ -251,9 +251,7 @@ def translate_accuracy(total_accepted: int, expected: int, tolerance: int) -> st
         return f"{ratio:.0%} (Under Limit)"
 
 
-def translate_coordination_needed(
-    within_tolerance: bool, use_redis: bool = True
-) -> str:
+def translate_coordination_needed(within_tolerance: bool, use_redis: bool = True) -> str:
     """Translate to coordination needed label.
 
     Args:
@@ -429,9 +427,7 @@ class TableFormatter:
         # Header row
         header_cells = []
         for i, header in enumerate(self.columns):
-            header_cells.append(
-                self._pad_cell(header, self._column_widths[i], self.alignments[i])
-            )
+            header_cells.append(self._pad_cell(header, self._column_widths[i], self.alignments[i]))
         lines.append("│" + "│".join(header_cells) + "│")
 
         # Header separator
@@ -441,9 +437,7 @@ class TableFormatter:
         for row in self.rows:
             data_cells = []
             for i, cell in enumerate(row):
-                data_cells.append(
-                    self._pad_cell(cell, self._column_widths[i], self.alignments[i])
-                )
+                data_cells.append(self._pad_cell(cell, self._column_widths[i], self.alignments[i]))
             lines.append("│" + "│".join(data_cells) + "│")
 
         # Bottom border
@@ -559,20 +553,14 @@ class BenchmarkFormatter:
         Returns:
             Formatted string for console output
         """
-        metadata = data.get("metadata", {})
         results = data.get("results", [])
 
         # Build output
         lines: list[str] = []
 
         # Header
-        lines.append(self._header("=" * 78))
         lines.append(self._header(f"{header_line:^78}"))
         lines.append(self._header("=" * 78))
-        lines.append(f"Timestamp: {metadata.get('timestamp', 'N/A')}")
-        lines.append(f"Platform: {metadata.get('platform', 'N/A')}")
-        lines.append(f"Python: {metadata.get('python_version', 'N/A')}")
-        lines.append("-" * 78)
         lines.append("")
 
         # Group results by algorithm
@@ -592,8 +580,7 @@ class BenchmarkFormatter:
 
             # Get worst stability
             stabilities = [
-                translate_stability(r.get("p99_ms", 0), r.get("p50_ms", 0))
-                for r in algo_results
+                translate_stability(r.get("p99_ms", 0), r.get("p50_ms", 0)) for r in algo_results
             ]
             # Count how many are "Very Stable"
             very_stable_count = stabilities.count("Very Stable")
@@ -608,9 +595,7 @@ class BenchmarkFormatter:
                 r.get("max_ms", 0) / r.get("p50_ms", 1) if r.get("p50_ms", 0) > 0 else 0
                 for r in algo_results
             ]
-            worst_consistency = translate_consistency(
-                max(max_ratios) if max_ratios else 0, 0
-            )
+            worst_consistency = translate_consistency(max(max_ratios) if max_ratios else 0, 0)
 
             algo_summaries.append(
                 {
@@ -628,9 +613,7 @@ class BenchmarkFormatter:
                     ),
                     "consistency": worst_consistency,
                     "throughput": avg_throughput,
-                    "results": sorted(
-                        algo_results, key=lambda x: x.get("concurrency", 0)
-                    ),
+                    "results": sorted(algo_results, key=lambda x: x.get("concurrency", 0)),
                 }
             )
 
@@ -638,47 +621,7 @@ class BenchmarkFormatter:
         speed_order = {"Fastest": 0, "Fast": 1, "Moderate": 2, "Slow": 3}
         algo_summaries.sort(key=lambda x: speed_order.get(x["speed"], 999))
 
-        # Calculate overall rating
         all_very_stable = all(s["stability"] == "Very Stable" for s in algo_summaries)
-        best_speed = algo_summaries[0]["speed"] if algo_summaries else "Slow"
-        if best_speed in ("Fastest", "Fast") and all_very_stable:
-            overall_rating = "Excellent"
-        elif best_speed in ("Fastest", "Fast", "Moderate"):
-            overall_rating = "Good"
-        elif best_speed == "Slow" or any(
-            s["stability"] == "Occasional Spikes" for s in algo_summaries
-        ):
-            overall_rating = "Fair"
-        else:
-            overall_rating = "Poor"
-
-        # Find best and most stable
-        best_algorithm = algo_summaries[0]["algorithm"] if algo_summaries else "N/A"
-        most_stable = (
-            max(
-                algo_summaries,
-                key=lambda x: (
-                    ["Very Stable", "Stable", "Occasional Spikes"].index(x["stability"])
-                    if x["stability"] in ["Very Stable", "Stable", "Occasional Spikes"]
-                    else 3
-                ),
-            )
-            if algo_summaries
-            else {"algorithm": "N/A", "stability": "N/A"}
-        )
-
-        # SUMMARY section
-        lines.append("SUMMARY")
-        lines.append(
-            f"  Best Algorithm: {best_algorithm} ({algo_summaries[0]['speed'] if algo_summaries else 'N/A'})"
-        )
-        lines.append(
-            f"  Most Stable: {most_stable['algorithm']} ({most_stable['stability']})"
-        )
-        lines.append(f"  Overall Rating: {overall_rating}")
-        lines.append("")
-        lines.append("-" * 78)
-        lines.append("")
 
         # DETAILED RESULTS table
         lines.append("DETAILED RESULTS")
@@ -729,17 +672,13 @@ class BenchmarkFormatter:
 
         if all_very_stable:
             insights.append(
-                self._success(
-                    "✓ All algorithms maintain stability across all concurrency levels"
-                )
+                self._success("✓ All algorithms maintain stability across all concurrency levels")
             )
 
         if algo_summaries:
             best = algo_summaries[0]["algorithm"]
             insights.append(
-                self._success(
-                    f"✓ {best} offers the best performance with minimal latency"
-                )
+                self._success(f"✓ {best} offers the best performance with minimal latency")
             )
 
         # Check for stability issues
@@ -747,9 +686,7 @@ class BenchmarkFormatter:
         if has_spikes:
             # Find which algorithm has spikes
             spike_algos = [
-                s["algorithm"]
-                for s in algo_summaries
-                if s["stability"] == "Occasional Spikes"
+                s["algorithm"] for s in algo_summaries if s["stability"] == "Occasional Spikes"
             ]
             if spike_algos:
                 insights.append(
@@ -775,20 +712,14 @@ class BenchmarkFormatter:
         Returns:
             Formatted string for console output
         """
-        metadata = data.get("metadata", {})
         results = data.get("results", [])
 
         lines: list[str] = []
 
         # Header
         header_line = "MEMORY BENCHMARK RESULTS"
-        lines.append(self._header("=" * 78))
         lines.append(self._header(f"{header_line:^78}"))
         lines.append(self._header("=" * 78))
-        lines.append(f"Timestamp: {metadata.get('timestamp', 'N/A')}")
-        lines.append(f"Platform: {metadata.get('platform', 'N/A')}")
-        lines.append(f"Python: {metadata.get('python_version', 'N/A')}")
-        lines.append("-" * 78)
         lines.append("")
 
         # Group results by algorithm
@@ -808,19 +739,13 @@ class BenchmarkFormatter:
                 key_count = r.get("key_count", 0)
                 mem_by_keycount[key_count] = {
                     "peak_bytes": r.get("peak_bytes", 0),
-                    "efficiency": translate_memory_efficiency(
-                        r.get("peak_bytes", 0), key_count
-                    ),
+                    "efficiency": translate_memory_efficiency(r.get("peak_bytes", 0), key_count),
                 }
 
             # Get efficiency at each scale
             efficiency_1k = mem_by_keycount.get(1000, {}).get("efficiency", "Moderate")
-            efficiency_10k = mem_by_keycount.get(10000, {}).get(
-                "efficiency", "Moderate"
-            )
-            efficiency_100k = mem_by_keycount.get(100000, {}).get(
-                "efficiency", "Moderate"
-            )
+            efficiency_10k = mem_by_keycount.get(10000, {}).get("efficiency", "Moderate")
+            efficiency_100k = mem_by_keycount.get(100000, {}).get("efficiency", "Moderate")
 
             # Calculate scalability
             mem_1k = mem_by_keycount.get(1000, {}).get("peak_bytes", 0)
@@ -849,38 +774,6 @@ class BenchmarkFormatter:
             return order.get(eff, 4)
 
         algo_summaries.sort(key=lambda x: get_eff_order(x["efficiency_100k"]))
-
-        # Calculate overall rating
-        all_efficient = all(
-            get_eff_order(s["efficiency_100k"]) <= 1 for s in algo_summaries
-        )
-        all_good_scalability = all(
-            get_eff_order(s["scalability"]) <= 1 for s in algo_summaries
-        )
-
-        if all_efficient and all_good_scalability:
-            overall_rating = "Excellent"
-        elif (
-            any(get_eff_order(s["efficiency_100k"]) == 2 for s in algo_summaries)
-            and all_good_scalability
-        ):
-            overall_rating = "Good"
-        elif any(get_eff_order(s["efficiency_100k"]) >= 3 for s in algo_summaries):
-            overall_rating = "Fair"
-        else:
-            overall_rating = "Poor"
-
-        # Find best algorithm
-        best_algorithm = algo_summaries[0]["algorithm"] if algo_summaries else "N/A"
-
-        # SUMMARY
-        lines.append("SUMMARY")
-        lines.append(f"  Most Memory Efficient: {best_algorithm}")
-        lines.append(f"  Best Scalability: {best_algorithm}")
-        lines.append(f"  Overall Rating: {overall_rating}")
-        lines.append("")
-        lines.append("-" * 78)
-        lines.append("")
 
         # MEMORY EFFICIENCY BY KEY COUNT table
         lines.append("MEMORY EFFICIENCY BY KEY COUNT")
@@ -916,9 +809,7 @@ class BenchmarkFormatter:
                     peak = mem_by_keycount[key_count]["peak_bytes"]
                     eff = mem_by_keycount[key_count]["efficiency"]
                     formatted = format_bytes(peak)
-                    lines.append(
-                        f"  {key_count:>6,} keys: {formatted:>10} peak   [{eff}]"
-                    )
+                    lines.append(f"  {key_count:>6,} keys: {formatted:>10} peak   [{eff}]")
             lines.append("")
 
         lines.append("-" * 78)
@@ -930,9 +821,7 @@ class BenchmarkFormatter:
 
         # Check linear scaling
         if all(s["scalability"] in ("Excellent", "Good") for s in algo_summaries):
-            insights.append(
-                self._success("✓ All algorithms scale linearly with key count")
-            )
+            insights.append(self._success("✓ All algorithms scale linearly with key count"))
 
         if algo_summaries:
             best = algo_summaries[0]["algorithm"]
@@ -942,9 +831,7 @@ class BenchmarkFormatter:
 
         # Check memory efficiency
         if all(get_eff_order(s["efficiency_100k"]) <= 1 for s in algo_summaries):
-            insights.append(
-                self._success("✓ Memory usage remains efficient even at 100K keys")
-            )
+            insights.append(self._success("✓ Memory usage remains efficient even at 100K keys"))
 
         for insight in insights:
             lines.append(f"  {insight}")
@@ -963,11 +850,8 @@ class BenchmarkFormatter:
         Returns:
             Formatted string for console output
         """
-        metadata = data.get("metadata", {})
         results = data.get("results", [])
         config = data.get("config", {})
-        users = data.get("users", 0)
-        requests_per_user = data.get("requests_per_user", 0)
         limit = int(config.get("limit", 0) or 0)
         period = int(config.get("period", 0) or 0)
         shared_key = str(data.get("shared_key", ""))
@@ -976,13 +860,8 @@ class BenchmarkFormatter:
 
         # Header
         header_line = "FAIRNESS BENCHMARK RESULTS"
-        lines.append(self._header("=" * 78))
         lines.append(self._header(f"{header_line:^78}"))
         lines.append(self._header("=" * 78))
-        lines.append(f"Timestamp: {metadata.get('timestamp', 'N/A')}")
-        lines.append(f"Platform: {metadata.get('platform', 'N/A')}")
-        lines.append(f"Python: {metadata.get('python_version', 'N/A')}")
-        lines.append("-" * 78)
         lines.append("")
 
         # Build summaries
@@ -997,9 +876,7 @@ class BenchmarkFormatter:
 
             fairness = translate_fairness(cv)
             distribution = translate_distribution_quality(cv, std_dev)
-            acceptance_rate = (
-                (total_accepted / total_requests * 100) if total_requests > 0 else 0
-            )
+            acceptance_rate = (total_accepted / total_requests * 100) if total_requests > 0 else 0
 
             algo_summaries.append(
                 {
@@ -1017,51 +894,6 @@ class BenchmarkFormatter:
 
         # Check if all are perfect
         all_perfect = all(s["fairness"] == "Perfect" for s in algo_summaries)
-        distribution_order = {
-            "Perfect": 0,
-            "Excellent": 1,
-            "Good": 2,
-            "Fair": 3,
-            "Poor": 4,
-        }
-        worst_distribution = (
-            max(
-                algo_summaries,
-                key=lambda s: distribution_order.get(s["distribution"], 999),
-            )["distribution"]
-            if algo_summaries
-            else "N/A"
-        )
-
-        # Calculate overall rating
-        if all_perfect:
-            overall_rating = "Perfect"
-        else:
-            cv_values = [s["cv"] for s in algo_summaries]
-            max_cv = max(cv_values) if cv_values else 0
-            if max_cv < 0.1:
-                overall_rating = "Excellent"
-            elif max_cv < 0.2:
-                overall_rating = "Good"
-            else:
-                overall_rating = "Fair"
-
-        # SUMMARY
-        lines.append("SUMMARY")
-        if all_perfect:
-            lines.append("  All Algorithms: Perfectly Fair")
-        else:
-            fair_count = sum(1 for s in algo_summaries if s["fairness"] == "Perfect")
-            lines.append(
-                f"  Perfectly Fair: {fair_count}/{len(algo_summaries)} algorithms"
-            )
-        lines.append(
-            f"  Distribution Quality: {worst_distribution}"
-        )
-        lines.append(f"  Overall Rating: {overall_rating}")
-        lines.append("")
-        lines.append("-" * 78)
-        lines.append("")
 
         # FAIRNESS ANALYSIS table
         lines.append("FAIRNESS ANALYSIS")
@@ -1097,12 +929,8 @@ class BenchmarkFormatter:
         for summary in algo_summaries:
             algo = summary["algorithm"]
             lines.append(f"{algo}")
-            lines.append(
-                f"  Standard Deviation: {summary['std_dev']:.1f} [{summary['fairness']}]"
-            )
-            lines.append(
-                f"  Coefficient of Variation: {summary['cv']:.2f} [{summary['fairness']}]"
-            )
+            lines.append(f"  Standard Deviation: {summary['std_dev']:.1f} [{summary['fairness']}]")
+            lines.append(f"  Coefficient of Variation: {summary['cv']:.2f} [{summary['fairness']}]")
             per_user_str = ", ".join(str(x) for x in summary["per_user"][:10])
             lines.append(f"  Per-User Distribution: {per_user_str}")
             total_accepted = summary["total_accepted"]
@@ -1127,18 +955,14 @@ class BenchmarkFormatter:
             )
 
         if all(s["std_dev"] == 0 for s in algo_summaries):
-            insights.append(
-                self._success("✓ Zero variance in per-user acceptance rates")
-            )
+            insights.append(self._success("✓ Zero variance in per-user acceptance rates"))
 
         insights.append(self._success("✓ Consistent behavior across all algorithms"))
         if algo_summaries and limit > 0 and period > 0:
             max_accepted = max(s["total_accepted"] for s in algo_summaries)
             total_requests = max(s["total_requests"] for s in algo_summaries)
             if max_accepted <= limit:
-                target = (
-                    f" on shared key {shared_key!r}" if shared_key else " on shared key"
-                )
+                target = f" on shared key {shared_key!r}" if shared_key else " on shared key"
                 insights.append(
                     self._success(
                         f"✓ Global cap enforced (accepted ≤{limit:,}/{period}s{target}: {max_accepted:,}/{total_requests:,})"
@@ -1168,7 +992,6 @@ class BenchmarkFormatter:
         Returns:
             Formatted string for console output
         """
-        metadata = data.get("metadata", {})
         results = data.get("results", [])
         config = data.get("config", {})
         instance_count = data.get("instance_count", 0)
@@ -1179,13 +1002,8 @@ class BenchmarkFormatter:
 
         # Header
         header_line = "MULTI-INSTANCE BENCHMARK RESULTS"
-        lines.append(self._header("=" * 78))
         lines.append(self._header(f"{header_line:^78}"))
         lines.append(self._header("=" * 78))
-        lines.append(f"Timestamp: {metadata.get('timestamp', 'N/A')}")
-        lines.append(f"Platform: {metadata.get('platform', 'N/A')}")
-        lines.append(f"Python: {metadata.get('python_version', 'N/A')}")
-        lines.append("-" * 78)
         lines.append("")
 
         # Build summaries
@@ -1220,31 +1038,6 @@ class BenchmarkFormatter:
                     "within_tolerance": within_tolerance,
                 }
             )
-
-        # Calculate overall rating
-        if len(safe_algorithms) == len(algo_summaries):
-            overall_rating = "Excellent"
-        elif len(safe_algorithms) > 0:
-            overall_rating = "Good"
-        elif all(
-            s["coordination"] != "Required (Not Available)" for s in algo_summaries
-        ):
-            overall_rating = "Fair"
-        else:
-            overall_rating = "Poor"
-
-        # SUMMARY
-        lines.append("SUMMARY")
-        if safe_algorithms:
-            lines.append(f"  Distributed-Safe Algorithm: {', '.join(safe_algorithms)}")
-        if unsafe_algorithms:
-            lines.append(f"  Coordination Required: {', '.join(unsafe_algorithms)}")
-        else:
-            lines.append("  Coordination Required: None")
-        lines.append(f"  Overall Rating: {overall_rating}")
-        lines.append("")
-        lines.append("-" * 78)
-        lines.append("")
 
         # DISTRIBUTED BEHAVIOR table
         lines.append("DISTRIBUTED BEHAVIOR")
@@ -1308,9 +1101,7 @@ class BenchmarkFormatter:
 
         for algo in safe_algorithms:
             insights.append(
-                self._success(
-                    f"✓ {algo} is safe for distributed deployments without coordination"
-                )
+                self._success(f"✓ {algo} is safe for distributed deployments without coordination")
             )
 
         for algo in unsafe_algorithms:
@@ -1328,9 +1119,7 @@ class BenchmarkFormatter:
             )
         if unsafe_algorithms:
             insights.append(
-                self._info(
-                    f"ℹ Use {', '.join(unsafe_algorithms)} with Redis backend for accuracy"
-                )
+                self._info(f"ℹ Use {', '.join(unsafe_algorithms)} with Redis backend for accuracy")
             )
 
         for insight in insights:

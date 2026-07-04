@@ -2,7 +2,7 @@
 	benchmark benchmark-local benchmark-redis benchmark-redis-docker \
 	benchmark-latency benchmark-memory benchmark-fairness \
 	benchmark-redis-latency benchmark-multi-instance \
-	redis-up redis-wait redis-down
+	redis-up redis-wait redis-down demo-gif
 
 REDIS_URL ?= redis://localhost:6379/15
 DOCKER_COMPOSE ?= docker compose
@@ -26,6 +26,7 @@ help:
 	@echo "  benchmark-redis-latency - Run Redis latency benchmark"
 	@echo "  benchmark-multi-instance - Run Redis multi-instance benchmark"
 	@echo "  benchmark-redis-docker - Run Redis benchmarks using docker-compose"
+	@echo "  demo-gif            - Re-record the benchmark proof GIF (requires vhs + docker)"
 
 
 install:
@@ -110,3 +111,8 @@ redis-wait:
 redis-down:
 	@echo "Stopping Redis..."
 	$(DOCKER_COMPOSE) down
+
+demo-gif:
+	@echo "Recording benchmark proof GIF via VHS..."
+	vhs demo/benchmark-proof.tape
+	@$(MAKE) redis-down
