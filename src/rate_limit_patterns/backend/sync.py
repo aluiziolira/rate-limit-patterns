@@ -12,7 +12,15 @@ from rate_limit_patterns.algorithms.base import RateLimitAlgorithm
 from rate_limit_patterns.algorithms.leaky_bucket import LeakyBucketAlgorithm
 from rate_limit_patterns.algorithms.sliding_window import SlidingWindowAlgorithm
 from rate_limit_patterns.algorithms.token_bucket import TokenBucketAlgorithm
-from rate_limit_patterns.backend.redis import _load_lua_script
+from rate_limit_patterns.backend._redis_shared import (
+    LUA_SCRIPTS,
+    build_script_call,
+    decode_key_type,
+    hash_metrics,
+    iter_missing_scripts,
+    parse_script_result,
+    zset_metrics,
+)
 from rate_limit_patterns.exceptions import (
     RateLimitBackendConfigurationError,
     RateLimitBackendUnavailableError,
@@ -20,8 +28,6 @@ from rate_limit_patterns.exceptions import (
 from rate_limit_patterns.models import AlgorithmType, RateLimitConfig, RateLimitResult
 
 _LOCK_STRIPES = 64
-_LUA_SCRIPTS = ("token_bucket", "sliding_window", "leaky_bucket")
-_REDIS_TIME_SENTINEL = -1
 logger = logging.getLogger(__name__)
 
 
@@ -222,10 +228,7 @@ class SyncRedisBackend:
         from redis.exceptions import RedisError
 
         with self._init_lock:
-            for script_name in _LUA_SCRIPTS:
-                if script_name in self._script_shas:
-                    continue
-                script_content = _load_lua_script(script_name)
+            for script_name, script_content in iter_missing_scripts(self._script_shas):
                 try:
                     sha = self._redis.script_load(script_content)
                 except RedisError as exc:
@@ -242,7 +245,7 @@ class SyncRedisBackend:
         now: float | None = None,
     ) -> RateLimitResult:
         """Check and increment the rate limit for a key."""
-        if config.algorithm not in _LUA_SCRIPTS:
+        if config.algorithm not in LUA_SCRIPTS:
             raise RateLimitBackendConfigurationError(f"Unsupported algorithm: {config.algorithm}")
 
         if config.algorithm not in self._script_shas:
@@ -254,48 +257,9 @@ class SyncRedisBackend:
                 "Lua scripts not initialized. Call SyncRedisBackend.initialize()."
             )
 
-        current_time = _REDIS_TIME_SENTINEL if now is None else now
-        if config.algorithm == "token_bucket":
-            tokens_per_second = config.tokens_per_second
-            args: list[Any] = [
-                config.burst_size or config.limit,
-                tokens_per_second,
-                current_time,
-            ]
-            keys = [self._apply_prefix(key)]
-        elif config.algorithm == "sliding_window":
-            args = [config.limit, config.period, current_time]
-            window_key = self._apply_prefix(key)
-            seq_key = self._apply_prefix(f"{key}:seq")
-            keys = [window_key, seq_key]
-        elif config.algorithm == "leaky_bucket":
-            capacity = config.burst_size or config.limit
-            args = [capacity, config.tokens_per_second, current_time]
-            keys = [self._apply_prefix(key)]
-        else:
-            raise RateLimitBackendConfigurationError(f"Unsupported algorithm: {config.algorithm}")
-
-        result = self._evalsha_with_retry(sha, keys, args, config)
-
-        allowed_int = int(result[0])
-        remaining = int(result[1])
-        retry_after_raw = int(result[2])
-        reset_at = float(result[3])
-        request_count = int(result[4]) if len(result) > 4 else 0
-
-        allowed = bool(allowed_int)
-        retry_after: int | None = None
-        if not allowed:
-            retry_after = None if retry_after_raw == 0 else retry_after_raw
-
-        return RateLimitResult(
-            allowed=allowed,
-            remaining=remaining,
-            limit=config.limit,
-            retry_after=retry_after,
-            reset_at=reset_at,
-            request_count=request_count,
-        )
+        call = build_script_call(key, config, now, self._apply_prefix)
+        result = self._evalsha_with_retry(sha, call.keys, call.args, config)
+        return parse_script_result(result, config)
 
     def _evalsha_with_retry(
         self,
@@ -332,8 +296,7 @@ class SyncRedisBackend:
         from redis.exceptions import RedisError
 
         self._script_shas.clear()
-        for script_name in _LUA_SCRIPTS:
-            script_content = _load_lua_script(script_name)
+        for script_name, script_content in iter_missing_scripts(self._script_shas):
             try:
                 sha = self._redis.script_load(script_content)
             except RedisError as exc:
@@ -358,52 +321,25 @@ class SyncRedisBackend:
         from redis.exceptions import RedisError
 
         try:
-            key_type_raw = self._redis.type(full_key)
-            if isinstance(key_type_raw, (bytes, bytearray)):
-                key_type = key_type_raw.decode("utf-8")
-            else:
-                key_type = str(key_type_raw)
-        except RedisError as exc:
-            raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
+            key_type = decode_key_type(self._redis.type(full_key))
 
-        if key_type == "none":
-            return {}
+            if key_type == "none":
+                return {}
 
-        if key_type == "hash":
-            try:
+            if key_type == "hash":
                 state = self._redis.hmget(
                     full_key, ["tokens", "last_refill", "queue_size", "last_leak"]
                 )
-            except RedisError as exc:
-                raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
-            return {
-                "key": full_key,
-                "storage_type": "hash",
-                "tokens": float(state[0]) if state[0] else None,
-                "last_refill": float(state[1]) if state[1] else None,
-                "queue_size": float(state[2]) if state[2] else None,
-                "last_leak": float(state[3]) if state[3] else None,
-            }
+                return hash_metrics(full_key, state)
 
-        if key_type == "zset":
-            try:
+            if key_type == "zset":
                 count = int(self._redis.zcard(full_key))
-            except RedisError as exc:
-                raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
-            window_start: float | None = None
-            if count > 0:
-                try:
+                oldest: list[Any] = []
+                if count > 0:
                     oldest = self._redis.zrange(full_key, 0, 0, withscores=True)
-                except RedisError as exc:
-                    raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
-                if oldest:
-                    window_start = float(oldest[0][1]) / 1000
-            return {
-                "key": full_key,
-                "storage_type": "zset",
-                "count": count,
-                "window_start": window_start,
-            }
+                return zset_metrics(full_key, count, oldest)
+        except RedisError as exc:
+            raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
 
         return {"key": full_key, "storage_type": key_type}
 
