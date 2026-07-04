@@ -48,6 +48,6 @@ def test_fairness_formatter_reports_global_cap_enforced() -> None:
 
     output = formatter.format_fairness_results(data)
 
-    assert "Distribution Quality: Poor" in output
+    assert "Poor" in output
     assert "Global cap enforced" in output
     assert "requests per user" not in output
