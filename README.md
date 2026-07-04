@@ -5,8 +5,12 @@
 ![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)
 ![Type Checked](https://img.shields.io/badge/type--checked-mypy-blue)
 ![Redis](https://img.shields.io/badge/redis-5.0+-red.svg)
-![Performance](https://img.shields.io/badge/throughput-215K%20RPS-green)
+![Performance](https://img.shields.io/badge/throughput-200K%2B%20RPS%20measured-green)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
+
+![Live benchmark run: in-process latency, Redis Lua latency, and multi-instance correctness](docs/assets/benchmark-proof.gif)
+
+*Live benchmark run recorded with [VHS](https://github.com/charmbracelet/vhs) ([`demo/benchmark-proof.tape`](demo/benchmark-proof.tape)) — nothing mocked: in-process latency, the atomic Redis Lua backend, and a 2-instance correctness check all run for real. Regenerate with `make demo-gif`.*
 
 This library provides a suite of algorithms to enforce quotas with **microsecond-scale in-process overhead** and a **Redis Lua-backed atomic path** for robust multi-instance deployments.
 
@@ -19,34 +23,40 @@ This library provides a suite of algorithms to enforce quotas with **microsecond
 
 ## Benchmark Proof
 
-**Status**: Verified on `Linux/WSL2` (Python 3.12) | **Date**: 2026-01-22
+The numbers below come from the live, unedited benchmark run shown in the recording at the top of this page.
+
+**Environment**: Linux (Fedora, kernel 7.0) | Python 3.14 | Redis via Docker | **Date**: 2026-07-04
+
+Reproduce it yourself: `make benchmark` (local) and `make benchmark-redis-docker` (distributed) — every run also writes raw JSON to `benchmarks/results/`.
 
 ### 1. In-Process Performance (Local Memory)
-At **5,000 concurrent requests**, the stateless core operates with negligible overhead (~3µs).
+At **5,000 concurrent requests**, the stateless core decides in single-digit microseconds.
 
 ```text
-Algorithm        p50       p99       Throughput      Memory (100k keys)
-Token Bucket     3.3 µs    12 µs     215,962 rps     37.4 MB
-Sliding Window   2.8 µs    13 µs     244,598 rps     43.5 MB
-Leaky Bucket     3.3 µs    11 µs     193,962 rps     37.4 MB
+Algorithm        p50       p99       Throughput
+Token Bucket     2.8 µs    5.2 µs    244,081 rps
+Sliding Window   2.4 µs    4.5 µs    289,675 rps
+Leaky Bucket     2.6 µs    4.5 µs    269,123 rps
 ```
 
 ### 2. Distributed Performance (Redis Lua)
-At **250 concurrent requests**, the Redis backend maintains strict consistency with predictable network/execution latency.
+At **250 concurrent requests**, the Redis backend maintains strict atomicity with predictable network/execution latency.
 
 ```text
-Algorithm        p50       p99       Throughput      Consistency
-Sliding Window   13.75 ms  23.24 ms  7,495 rps       100% (No race conditions)
-Leaky Bucket     12.17 ms  21.65 ms  7,544 rps       100% (No race conditions)
+Algorithm        p50       p99        Throughput
+Token Bucket     7.29 ms   11.37 ms   16,730 rps
+Sliding Window   7.83 ms   10.75 ms   14,075 rps
+Leaky Bucket     4.95 ms    8.39 ms   20,370 rps
 ```
 
 ### 3. Distributed Correctness Verification
-Multi-instance simulations (2 independent processes, global limit 100/60s) confirm **zero over-limit leakages** despite network latency and concurrency.
+Two independent processes sharing a global limit of 100/60s admit **exactly 100 requests** — zero over-limit leakage, no coordination beyond the atomic Lua scripts.
 
 ```text
-Target: 100 accepted requests
-Result: 100 accepted requests (0.0% error rate)
-Status: PASSED
+Algorithm        Accepted / Expected   Status
+Token Bucket     100 / 100             Distributed-Safe ✓
+Sliding Window   100 / 100             Distributed-Safe ✓
+Leaky Bucket     100 / 100             Distributed-Safe ✓
 ```
 
 ---
