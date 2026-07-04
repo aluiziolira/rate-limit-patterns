@@ -9,6 +9,13 @@ from rate_limit_patterns.backend.base import RateLimitBackend, SyncRateLimitBack
 from rate_limit_patterns.models import RateLimitConfig, RateLimitResult
 
 
+def _validate_key_prefix(backend: object, key_prefix: str) -> None:
+    """Reject prefixing on both the limiter and its backend at once."""
+    backend_prefix = getattr(backend, "key_prefix", "")
+    if isinstance(backend_prefix, str) and backend_prefix and key_prefix:
+        raise ValueError("Configure key_prefix on either RateLimiter or backend, not both.")
+
+
 class RateLimiter:
     """Facade providing a simple interface for rate limiting operations.
 
@@ -35,9 +42,7 @@ class RateLimiter:
             config: The rate limit configuration.
             key_prefix: Optional prefix for all keys (do not set if backend prefixes).
         """
-        backend_prefix = getattr(backend, "key_prefix", "")
-        if isinstance(backend_prefix, str) and backend_prefix and key_prefix:
-            raise ValueError("Configure key_prefix on either RateLimiter or backend, not both.")
+        _validate_key_prefix(backend, key_prefix)
         self._backend = backend
         self._config = config
         self._key_prefix = key_prefix
@@ -122,9 +127,7 @@ class SyncRateLimiter:
         key_prefix: str = "",
     ) -> None:
         """Initialize the synchronous rate limiter."""
-        backend_prefix = getattr(backend, "key_prefix", "")
-        if isinstance(backend_prefix, str) and backend_prefix and key_prefix:
-            raise ValueError("Configure key_prefix on either RateLimiter or backend, not both.")
+        _validate_key_prefix(backend, key_prefix)
         self._backend = backend
         self._config = config
         self._key_prefix = key_prefix
