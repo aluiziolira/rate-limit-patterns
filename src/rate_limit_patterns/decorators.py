@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -61,20 +62,20 @@ def rate_limit(
             ...
     """
 
+    config = RateLimitConfig(
+        algorithm=algorithm,
+        limit=limit,
+        period=period,
+        burst_size=limit,
+    )
+
     def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> T:
             if key_func is not None:
                 effective_key = key_func(*args, **kwargs)
             else:
                 effective_key = str(kwargs[key]) if key in kwargs else key
-
-            # Build rate limit config
-            config = RateLimitConfig(
-                algorithm=algorithm,
-                limit=limit,
-                period=period,
-                burst_size=limit,
-            )
 
             # Check and increment the rate limit
             result = await backend.check_and_increment(effective_key, config)

@@ -5,7 +5,9 @@
 	redis-up redis-wait redis-down
 
 REDIS_URL ?= redis://localhost:6379/15
-BENCH_CMD = poetry run python -m benchmarks.scenarios
+DOCKER_COMPOSE ?= docker compose
+POETRY ?= poetry
+BENCH_CMD = $(POETRY) run python -m benchmarks.scenarios
 
 help:
 	@echo "Available targets:"
@@ -27,31 +29,31 @@ help:
 
 
 install:
-	poetry install --with dev
+	$(POETRY) install --with dev
 
 test:
 	@echo "Starting Redis..."
-	docker-compose up -d redis
+	$(DOCKER_COMPOSE) up -d redis
 	@echo "Waiting for Redis to be ready..."
 	@sleep 2
 	@echo "Running tests..."
-	@REDIS_URL=redis://localhost:6379/15 poetry run pytest tests/ -n auto --cov=rate_limit_patterns --cov-report=term-missing --cov-report=html --cov-fail-under=85; \
+	@REDIS_URL=redis://localhost:6379/15 $(POETRY) run pytest tests/ -n auto --cov=rate_limit_patterns --cov-report=term-missing --cov-report=html --cov-fail-under=85; \
 	RET=$$?; \
 	echo "Stopping Redis..."; \
-	docker-compose down; \
+	$(DOCKER_COMPOSE) down; \
 	[ $$RET -eq 5 ] || exit $$RET
 
 test-quick:
-	poetry run pytest tests/ -n auto
+	$(POETRY) run pytest tests/ -n auto
 
 lint:
-	poetry run ruff check src/ tests/
-	poetry run ruff format --check src/ tests/
-	poetry run mypy src/ --strict
+	$(POETRY) run ruff check src/ tests/
+	$(POETRY) run ruff format --check src/ tests/
+	$(POETRY) run mypy src/ --strict
 
 format:
-	poetry run ruff format src/ tests/
-	poetry run ruff check --fix src/ tests/
+	$(POETRY) run ruff format src/ tests/
+	$(POETRY) run ruff check --fix src/ tests/
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -99,7 +101,7 @@ benchmark-redis-docker:
 
 redis-up:
 	@echo "Starting Redis via docker-compose..."
-	docker-compose up -d redis
+	$(DOCKER_COMPOSE) up -d redis
 
 redis-wait:
 	@echo "Waiting for Redis to be ready..."
@@ -107,4 +109,4 @@ redis-wait:
 
 redis-down:
 	@echo "Stopping Redis..."
-	docker-compose down
+	$(DOCKER_COMPOSE) down
