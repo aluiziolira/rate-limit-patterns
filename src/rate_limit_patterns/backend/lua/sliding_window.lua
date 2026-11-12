@@ -59,6 +59,11 @@ if oldest[2] ~= nil then
             wait_ms = 0
         end
         retry_after = math.ceil(wait_ms / 1000)
+        -- Match Python SlidingWindowAlgorithm: denied responses always advertise
+        -- at least one second so clients never see retry_after=0/None.
+        if retry_after < 1 then
+            retry_after = 1
+        end
     end
 else
     reset_at = (now_ms + window_ms) / 1000
