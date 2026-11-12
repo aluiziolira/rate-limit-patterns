@@ -1,16 +1,18 @@
 # High-Performance Rate Limiting: Benchmark & Architecture Report
 
-> **Metric Snapshot (Observed 2026-01-22)**:
+> **Historical metric snapshot (Observed 2026-01-22; not shipped as run artifacts)**:
 > Local p50 ≈ 2.7–3.3µs and p99 ≈ 9.3–11.4µs @ 5,000 concurrency ·
 > Memory @ 100K keys ≈ 37–44MB ·
 > Redis p50 ≈ 10–13ms and p99 ≈ 20–22ms @ 250 concurrency ·
-> Multi-instance accuracy: 100% (within tolerance)
+> Shared-quota accuracy: 100% (within tolerance)
+
+Reproduce current numbers with `make benchmark-latency` (local) or `make benchmark-redis-docker` (Redis). JSON outputs land in `benchmarks/results/` (gitignored).
 
 ## 1. Executive Summary
 
-This report summarizes the observed performance and reliability characteristics of the `rate-limit-patterns` library based on the most recent benchmark execution.
+This report summarizes historical observed performance characteristics and the methodology behind the benchmark suite.
 
-**Run Metadata (Most Recent)**
+**Run Metadata (Historical sample)**
 * **Timestamp (UTC)**: 2026-01-22T00:24:32Z to 2026-01-22T00:24:48Z
 * **Platform**: Linux (WSL2 kernel shown in benchmark metadata)
 * **Python**: 3.12.1
@@ -83,11 +85,11 @@ Observed peak allocations via `tracemalloc` (`benchmarks/results/memory_20260122
 
 ## 4. Distributed Consistency & Fairness
 
-### 4.1 Multi-Instance Consistency (Redis)
+### 4.1 Shared-Quota Consistency (Redis)
 
-`benchmarks/results/multi_instance_20260122T002448Z.json` simulates **2 instances** with a **global limit=100/60s** and tolerance **±2**.
+`benchmarks/results/multi_instance_20260122T002448Z.json` runs **two Redis clients in one process** against a **global limit=100/60s** (tolerance **±2**). This checks Lua atomicity under concurrent callers; it is not a cross-host distributed stress test.
 
-* **Result**: All algorithms accepted **100/100** (within tolerance) in the tested scenario.
+* **Result (historical)**: All algorithms accepted **100/100** (within tolerance) in the tested scenario.
 
 ### 4.2 Fairness (Shared-Key Contention)
 
