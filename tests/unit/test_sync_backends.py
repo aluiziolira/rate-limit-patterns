@@ -363,6 +363,40 @@ def test_sync_redis_initialize_raises_on_error() -> None:
         backend.initialize()
 
 
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_sync_redis_initialize_completes_partial_cache_on_retry(fail_at: int) -> None:
+    client = MagicMock()
+    client.script_load.side_effect = [f"sha-{i}" for i in range(fail_at)] + [RedisError("load")]
+    backend = SyncRedisBackend(client=client)
+
+    with pytest.raises(RateLimitBackendUnavailableError):
+        backend.initialize()
+
+    client.script_load.reset_mock(side_effect=True)
+    client.script_load.return_value = "retry-sha"
+    backend.initialize()
+
+    assert client.script_load.call_count == 3 - fail_at
+    assert set(backend._script_shas) == {"token_bucket", "sliding_window", "leaky_bucket"}
+
+
+@pytest.mark.parametrize("error_type", [RedisConnectionError, RedisTimeoutError, RedisError])
+def test_sync_noscript_reload_failure_is_normalized(error_type: type[RedisError]) -> None:
+    client = MagicMock()
+    client.evalsha.side_effect = NoScriptError("missing")
+    failure = error_type("reload failed")
+    client.script_load.side_effect = failure
+    backend = SyncRedisBackend(client=client)
+    backend._script_shas = {"token_bucket": "sha"}
+    config = RateLimitConfig(algorithm="token_bucket", limit=1, period=1)
+
+    with pytest.raises(RateLimitBackendUnavailableError) as caught:
+        backend.check_and_increment("key", config)
+
+    assert caught.value.__cause__ is failure
+    client.evalsha.assert_called_once()
+
+
 def test_sync_redis_check_unsupported_algorithm_raises() -> None:
     """Unsupported algorithms are rejected."""
     mock_redis = MagicMock()
