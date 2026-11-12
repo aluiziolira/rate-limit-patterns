@@ -71,7 +71,7 @@ introduced.
 ## Choosing an Algorithm (Checklist)
 
 - **Need burst tolerance?** Use **Token Bucket**.
-- **Need strict, audit-grade limits?** Use **Sliding Window Log** (note the O(N) memory cost).
+- **Need an exact rolling-window quota?** Use **Sliding Window Log** (note the O(N) memory cost).
 - **Need smooth output rate?** Use **Leaky Bucket**.
 
 See `docs/ALGORITHMS.md` for full trade-offs and implementation details.

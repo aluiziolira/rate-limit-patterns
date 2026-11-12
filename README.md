@@ -50,14 +50,14 @@ Most home-grown rate limiters fail in two critical ways:
 1.  **Race Conditions**: Naive "Read-Check-Write" patterns allow parallel requests to slip through before the counter updates.
 2.  **Clock Drift**: relying on server-local time without synchronization leads to inconsistent windows across a fleet.
 
-This project solves these specific gaps by implementing **atomic-by-design** algorithms where every decision is the result of a single, indivisible Lua script execution on the storage backend.
+This project addresses check-then-act races on a shared Redis backend by running each admission decision as one Lua script (`EVALSHA`): allow/deny and the state update cannot interleave for the same key among concurrent clients sharing that Redis instance. Failover, lost state, ambiguous timeouts, and Redis Cluster behavior remain out of scope — see [Remaining Limits](#remaining-limits).
 
 ---
 
 ## Technical Decisions
 
-### 1. Atomicity is Non-Negotiable
-Distributed systems cannot rely on application-level locks for rate limiting without destroying throughput. Instead of a "check then increment" flow (which is vulnerable to race conditions), this library pushes the logic to the data. By using Redis Lua scripts (`EVALSHA`), we ensure that the calculation of "allowed vs. denied" and the "state update" happen in a single frozen moment of time. This guarantees that even if 500 requests hit 10 containers simultaneously, the global limit is respected exactly.
+### 1. Per-decision Lua atomicity
+Application-level locks are a poor fit for hot-path rate limiting across processes. Instead of a separate "check then increment", Redis-backed decisions use Lua scripts (`EVALSHA`) so the allow/deny calculation and state update run as one atomic operation per key. Concurrent clients that share a Redis instance therefore cannot interleave a check and an update for that key. This does not claim correctness under failover, lost Redis state, ambiguous timeouts after a client gives up, or Redis Cluster beyond hash-tag key placement — see [Remaining Limits](#remaining-limits).
 
 ### 2. Stateless Core, Swappable Backends
 The algorithmic logic is decoupled from storage. Each algorithm implements a pure function protocol: `(state, config, time) -> (new_state, decision)`.
@@ -65,7 +65,7 @@ The algorithmic logic is decoupled from storage. Each algorithm implements a pur
 *   **Trade-off**: While this requires maintaining dual implementations (Python + Lua), it ensures that our local simulations (`make benchmark-local`) are mathematically equivalent to production behavior, enabling high-confidence offline testing.
 
 ### 3. Explicit Memory vs. Precision Trade-offs
-We expose the cost of precision. The **Sliding Window Log** offers "audit-grade" accuracy (remembering the exact timestamp of every request) but at `O(N)` memory cost. For high-throughput endpoints (e.g., 10k RPS), storing 10k timestamps is wasteful. In those cases, we explicitly recommend **Token Bucket** or **Leaky Bucket**, which maintain `O(1)` state (just two numbers: `tokens` and `last_updated`), sacrificing microscopic window precision for massive scalability.
+We expose the cost of precision. The **Sliding Window Log** keeps an exact rolling-window quota (timestamp per request) at `O(N)` memory cost. For high-throughput endpoints that cannot afford that storage, prefer **Token Bucket** or **Leaky Bucket**, which maintain `O(1)` state (`tokens`/`queue_size` and a last-update timestamp) and trade fine-grained window exactness for bounded memory.
 
 ---
 
