@@ -218,13 +218,9 @@ class RedisBackend:
                     "Lua scripts not initialized after reload."
                 ) from exc
             try:
-                return cast(
-                    list[Any], await redis_client.evalsha(new_sha, len(keys), *keys, *args)
-                )
+                return cast(list[Any], await redis_client.evalsha(new_sha, len(keys), *keys, *args))
             except (RedisConnectionError, RedisTimeoutError, RedisError) as retry_exc:
-                raise RateLimitBackendUnavailableError(
-                    "Redis backend unavailable."
-                ) from retry_exc
+                raise RateLimitBackendUnavailableError("Redis backend unavailable.") from retry_exc
         except (RedisConnectionError, RedisTimeoutError, RedisError) as exc:
             raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
 

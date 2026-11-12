@@ -226,9 +226,7 @@ class SyncRedisBackend:
             try:
                 return cast(list[Any], self._redis.evalsha(new_sha, len(keys), *keys, *args))
             except (RedisConnectionError, RedisTimeoutError, RedisError) as retry_exc:
-                raise RateLimitBackendUnavailableError(
-                    "Redis backend unavailable."
-                ) from retry_exc
+                raise RateLimitBackendUnavailableError("Redis backend unavailable.") from retry_exc
         except (RedisConnectionError, RedisTimeoutError, RedisError) as exc:
             raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
 
