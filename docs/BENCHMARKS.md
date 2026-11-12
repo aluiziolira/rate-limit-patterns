@@ -6,7 +6,7 @@
 > Redis p50 ≈ 10–13ms and p99 ≈ 20–22ms @ 250 concurrency ·
 > Shared-quota accuracy: 100% (within tolerance)
 
-Reproduce current numbers with `make benchmark-latency` (local) or `make benchmark-redis-docker` (Redis). JSON outputs land in `benchmarks/results/` (gitignored).
+Reproduce local latency measurements with `make benchmark-latency` or Redis measurements with `make benchmark-redis-docker`. The latency target runs `python -m benchmarks.scenarios.latency`; it writes a timestamped `benchmarks/results/latency_*.json` artifact and formats it with `BenchmarkFormatter`. The summary includes speed, stability, consistency, and throughput classifications per algorithm, and p50, p95, and p99 latency for each concurrency level. JSON outputs land in `benchmarks/results/` (gitignored). Values depend on the host; consult the artifact for actual measurements.
 
 ## 1. Executive Summary
 

@@ -30,14 +30,7 @@ Hardcoded throughput/latency tables are intentionally omitted here. Absolute num
 make benchmark-latency
 ```
 
-That writes `benchmarks/results/latency_*.json` and prints a compact table. Example shape from a local run:
-
-```text
-Algorithm        Speed   Stability     Consistency      Throughput
-token_bucket     Fast    Very Stable   Very Consistent  ~170k–220k rps
-sliding_window   Fast    Very Stable   Very Consistent  ~170k–220k rps
-leaky_bucket     Fast    Very Stable   Very Consistent  ~150k–200k rps
-```
+That writes a timestamped `benchmarks/results/latency_*.json` artifact and prints a formatted summary. The formatter reports per-algorithm speed, stability, consistency, and throughput classifications, plus p50, p95, and p99 latency by concurrency level. Actual measurements depend on the host; no throughput figures are asserted here.
 
 Redis-backed scenarios (requires Redis):
 
@@ -123,6 +116,6 @@ if __name__ == "__main__":
 
 Engineering trade-offs that remain intentional:
 
-*   **Local state is per process** — `LocalBackend` / `SyncLocalBackend` do not share quotas across instances.
+*   **Local state is per backend instance** — `LocalBackend` / `SyncLocalBackend` instances do not share quotas, including instances in the same process.
 *   **Script atomicity is per decision** — each `EVALSHA` is atomic; there is no multi-key saga across independent rate-limit keys.
 *   **Out of scope** — automatic failover, reconstructing lost Redis state, resolving ambiguous responses after a timeout, and Redis Cluster operation beyond hash-tag key placement for sliding window.
