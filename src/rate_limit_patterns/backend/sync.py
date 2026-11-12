@@ -223,7 +223,12 @@ class SyncRedisBackend:
                 raise RateLimitBackendConfigurationError(
                     "Lua scripts not initialized after reload."
                 ) from exc
-            return cast(list[Any], self._redis.evalsha(new_sha, len(keys), *keys, *args))
+            try:
+                return cast(list[Any], self._redis.evalsha(new_sha, len(keys), *keys, *args))
+            except (RedisConnectionError, RedisTimeoutError, RedisError) as retry_exc:
+                raise RateLimitBackendUnavailableError(
+                    "Redis backend unavailable."
+                ) from retry_exc
         except (RedisConnectionError, RedisTimeoutError, RedisError) as exc:
             raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
 

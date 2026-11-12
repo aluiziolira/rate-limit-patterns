@@ -360,6 +360,37 @@ def test_sync_redis_evalsha_recovers_from_noscript() -> None:
     assert mock_redis.evalsha.call_count == 2
 
 
+@pytest.mark.parametrize(
+    "retry_error",
+    [
+        RedisConnectionError("down after reload"),
+        RedisTimeoutError("timeout after reload"),
+    ],
+    ids=["connection", "timeout"],
+)
+def test_sync_redis_noscript_retry_translates_errors(retry_error: Exception) -> None:
+    """Errors raised by the post-NOSCRIPT retry become backend-unavailable."""
+    mock_redis = MagicMock()
+    mock_redis.evalsha.side_effect = [NoScriptError("missing"), retry_error]
+    mock_redis.script_load.return_value = "new_sha"
+
+    backend = SyncRedisBackend(client=mock_redis)
+    backend._script_shas = {"token_bucket": "stale_sha"}
+
+    config = RateLimitConfig(
+        algorithm="token_bucket",
+        limit=1,
+        period=1,
+        burst_size=1,
+    )
+
+    with pytest.raises(RateLimitBackendUnavailableError):
+        backend.check_and_increment("user:1", config)
+
+    assert mock_redis.script_load.called
+    assert mock_redis.evalsha.call_count == 2
+
+
 def test_sync_redis_evalsha_translates_connection_errors() -> None:
     """Connection errors are mapped to backend-unavailable errors."""
     mock_redis = MagicMock()

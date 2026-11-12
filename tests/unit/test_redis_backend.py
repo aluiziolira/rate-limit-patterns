@@ -225,6 +225,37 @@ class TestRedisBackendUnit:
             assert mock_redis.evalsha.call_count == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "retry_error",
+        [
+            RedisConnectionError("down after reload"),
+            RedisTimeoutError("timeout after reload"),
+        ],
+        ids=["connection", "timeout"],
+    )
+    async def test_noscript_retry_translates_errors(
+        self,
+        mock_redis: MagicMock,
+        config: RateLimitConfig,
+        retry_error: Exception,
+    ) -> None:
+        """Errors raised by the post-NOSCRIPT retry become backend-unavailable."""
+        mock_redis.evalsha = AsyncMock(side_effect=[NoScriptError("NOSCRIPT"), retry_error])
+
+        with patch(
+            "rate_limit_patterns.backend.redis.Redis",
+            return_value=mock_redis,
+        ):
+            backend = RedisBackend(url="redis://localhost")
+            backend._script_shas = {"token_bucket": "stale_sha"}
+
+            with pytest.raises(RateLimitBackendUnavailableError):
+                await backend.check_and_increment("user:123", config)
+
+            assert mock_redis.script_load.called
+            assert mock_redis.evalsha.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_timeout_translates_to_backend_error(
         self, mock_redis: MagicMock, config: RateLimitConfig
     ) -> None:
