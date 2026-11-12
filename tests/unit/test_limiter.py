@@ -1,5 +1,6 @@
 """Unit tests for RateLimiter facade."""
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -158,6 +159,25 @@ class TestRateLimiter:
             assert backend.initialized is True
 
         assert backend.closed is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancelled", [False, True])
+    async def test_failed_entry_preserves_error_when_cleanup_fails(
+        self, config: RateLimitConfig, cancelled: bool
+    ) -> None:
+        init_error = asyncio.CancelledError() if cancelled else RuntimeError("initialize failed")
+        backend = LifecycleBackend()
+        backend.initialize = AsyncMock(side_effect=init_error)
+        backend.close = AsyncMock(side_effect=RuntimeError("close failed"))
+        limiter = RateLimiter(backend=backend, config=config)
+
+        with pytest.raises(type(init_error)) as caught:
+            async with limiter:
+                pytest.fail("failed entry must not execute the context body")
+
+        assert caught.value is init_error
+        assert any("close failed" in note for note in caught.value.__notes__)
+        backend.close.assert_awaited_once_with()
 
     @pytest.mark.asyncio
     async def test_context_manager_closes_on_failed_enter(self, config: RateLimitConfig) -> None:

@@ -87,9 +87,14 @@ class RateLimiter:
                 result = initializer()
                 if inspect.isawaitable(result):
                     await result
-        except BaseException:
+        except BaseException as init_error:
             # __aexit__ is not called when __aenter__ raises; close partial resources.
-            await self._close_backend()
+            try:
+                await self._close_backend()
+            except BaseException as close_error:
+                init_error.add_note(
+                    f"Backend cleanup after initialization failure also failed: {close_error!r}"
+                )
             raise
         return self
 
@@ -181,9 +186,14 @@ class SyncRateLimiter:
                         "SyncRateLimiter backend initialize() returned awaitable; "
                         "use RateLimiter instead."
                     )
-        except BaseException:
+        except BaseException as init_error:
             # __exit__ is not called when __enter__ raises; close partial resources.
-            self._close_backend()
+            try:
+                self._close_backend()
+            except BaseException as close_error:
+                init_error.add_note(
+                    f"Backend cleanup after initialization failure also failed: {close_error!r}"
+                )
             raise
         return self
 

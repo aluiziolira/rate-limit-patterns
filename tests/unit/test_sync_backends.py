@@ -20,6 +20,25 @@ from rate_limit_patterns.limiter import SyncRateLimiter
 from rate_limit_patterns.models import RateLimitConfig
 
 
+def test_sync_failed_entry_preserves_error_when_cleanup_fails() -> None:
+    init_error = RuntimeError("initialize failed")
+    backend = MagicMock()
+    backend.key_prefix = ""
+    backend.initialize.side_effect = init_error
+    backend.close.side_effect = RuntimeError("close failed")
+    limiter = SyncRateLimiter(
+        backend=backend, config=RateLimitConfig(algorithm="token_bucket", limit=1, period=1)
+    )
+
+    with pytest.raises(RuntimeError, match="initialize failed") as caught:
+        with limiter:
+            pytest.fail("failed entry must not execute the context body")
+
+    assert caught.value is init_error
+    assert any("close failed" in note for note in caught.value.__notes__)
+    backend.close.assert_called_once_with()
+
+
 def test_sync_local_backend_allows_and_resets() -> None:
     """SyncLocalBackend supports basic check and reset."""
     backend = SyncLocalBackend()
