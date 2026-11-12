@@ -20,6 +20,25 @@ from rate_limit_patterns.limiter import SyncRateLimiter
 from rate_limit_patterns.models import RateLimitConfig
 
 
+def test_sync_failed_entry_preserves_error_when_cleanup_fails() -> None:
+    init_error = RuntimeError("initialize failed")
+    backend = MagicMock()
+    backend.key_prefix = ""
+    backend.initialize.side_effect = init_error
+    backend.close.side_effect = RuntimeError("close failed")
+    limiter = SyncRateLimiter(
+        backend=backend, config=RateLimitConfig(algorithm="token_bucket", limit=1, period=1)
+    )
+
+    with pytest.raises(RuntimeError, match="initialize failed") as caught:
+        with limiter:
+            pytest.fail("failed entry must not execute the context body")
+
+    assert caught.value is init_error
+    assert any("close failed" in note for note in caught.value.__notes__)
+    backend.close.assert_called_once_with()
+
+
 def test_sync_local_backend_allows_and_resets() -> None:
     """SyncLocalBackend supports basic check and reset."""
     backend = SyncLocalBackend()
@@ -214,6 +233,70 @@ def test_sync_rate_limiter_facade() -> None:
         assert result.allowed is True
 
 
+def test_sync_rate_limiter_closes_on_failed_enter() -> None:
+    """Failed __enter__ still closes backends that started initialize."""
+
+    class FailingInitSyncBackend:
+        def __init__(self) -> None:
+            self.initialized = False
+            self.closed = False
+
+        def initialize(self) -> None:
+            self.initialized = True
+            raise RuntimeError("initialize failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+        def check_and_increment(
+            self, key: str, config: RateLimitConfig, *, now: float | None = None
+        ) -> Any:
+            raise NotImplementedError
+
+        def reset(self, key: str) -> None:
+            raise NotImplementedError
+
+        def get_metrics(self, key: str) -> dict[str, Any]:
+            raise NotImplementedError
+
+    backend = FailingInitSyncBackend()
+    config = RateLimitConfig(
+        algorithm="token_bucket",
+        limit=1,
+        period=1,
+        burst_size=1,
+    )
+    limiter = SyncRateLimiter(backend=backend, config=config)
+
+    with pytest.raises(RuntimeError, match="initialize failed"):
+        with limiter:
+            pass
+
+    assert backend.initialized is True
+    assert backend.closed is True
+
+
+def test_sync_redis_context_manager_closes_client_on_script_load_failure() -> None:
+    """Injected sync Redis clients are closed when script load fails in __enter__."""
+    mock_redis = MagicMock()
+    mock_redis.script_load.side_effect = RedisError("script load failed")
+
+    backend = SyncRedisBackend(client=mock_redis)
+    config = RateLimitConfig(
+        algorithm="token_bucket",
+        limit=1,
+        period=1,
+        burst_size=1,
+    )
+    limiter = SyncRateLimiter(backend=backend, config=config)
+
+    with pytest.raises(RateLimitBackendUnavailableError):
+        with limiter:
+            pass
+
+    mock_redis.close.assert_called()
+
+
 def test_sync_redis_backend_uses_evalsha() -> None:
     """SyncRedisBackend uses evalsha on the provided client."""
     mock_redis = MagicMock()
@@ -278,6 +361,40 @@ def test_sync_redis_initialize_raises_on_error() -> None:
 
     with pytest.raises(RateLimitBackendUnavailableError):
         backend.initialize()
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_sync_redis_initialize_completes_partial_cache_on_retry(fail_at: int) -> None:
+    client = MagicMock()
+    client.script_load.side_effect = [f"sha-{i}" for i in range(fail_at)] + [RedisError("load")]
+    backend = SyncRedisBackend(client=client)
+
+    with pytest.raises(RateLimitBackendUnavailableError):
+        backend.initialize()
+
+    client.script_load.reset_mock(side_effect=True)
+    client.script_load.return_value = "retry-sha"
+    backend.initialize()
+
+    assert client.script_load.call_count == 3 - fail_at
+    assert set(backend._script_shas) == {"token_bucket", "sliding_window", "leaky_bucket"}
+
+
+@pytest.mark.parametrize("error_type", [RedisConnectionError, RedisTimeoutError, RedisError])
+def test_sync_noscript_reload_failure_is_normalized(error_type: type[RedisError]) -> None:
+    client = MagicMock()
+    client.evalsha.side_effect = NoScriptError("missing")
+    failure = error_type("reload failed")
+    client.script_load.side_effect = failure
+    backend = SyncRedisBackend(client=client)
+    backend._script_shas = {"token_bucket": "sha"}
+    config = RateLimitConfig(algorithm="token_bucket", limit=1, period=1)
+
+    with pytest.raises(RateLimitBackendUnavailableError) as caught:
+        backend.check_and_increment("key", config)
+
+    assert caught.value.__cause__ is failure
+    client.evalsha.assert_called_once()
 
 
 def test_sync_redis_check_unsupported_algorithm_raises() -> None:
@@ -357,6 +474,37 @@ def test_sync_redis_evalsha_recovers_from_noscript() -> None:
     result = backend.check_and_increment("user:1", config)
 
     assert result.allowed is True
+    assert mock_redis.evalsha.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "retry_error",
+    [
+        RedisConnectionError("down after reload"),
+        RedisTimeoutError("timeout after reload"),
+    ],
+    ids=["connection", "timeout"],
+)
+def test_sync_redis_noscript_retry_translates_errors(retry_error: Exception) -> None:
+    """Errors raised by the post-NOSCRIPT retry become backend-unavailable."""
+    mock_redis = MagicMock()
+    mock_redis.evalsha.side_effect = [NoScriptError("missing"), retry_error]
+    mock_redis.script_load.return_value = "new_sha"
+
+    backend = SyncRedisBackend(client=mock_redis)
+    backend._script_shas = {"token_bucket": "stale_sha"}
+
+    config = RateLimitConfig(
+        algorithm="token_bucket",
+        limit=1,
+        period=1,
+        burst_size=1,
+    )
+
+    with pytest.raises(RateLimitBackendUnavailableError):
+        backend.check_and_increment("user:1", config)
+
+    assert mock_redis.script_load.called
     assert mock_redis.evalsha.call_count == 2
 
 

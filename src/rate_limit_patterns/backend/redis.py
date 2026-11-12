@@ -130,19 +130,32 @@ class RedisBackend:
 
         This method can be called multiple times safely.
         """
-        self._ensure_redis()
-        redis_client = cast("RedisProtocol", self._redis)
         from redis.exceptions import RedisError
 
         async with self._init_lock:
-            for script_name, script_content in iter_missing_scripts(self._script_shas):
-                try:
-                    sha = await redis_client.script_load(script_content)
-                except RedisError as exc:
-                    raise RateLimitBackendUnavailableError(
-                        "Failed to load Redis Lua scripts."
-                    ) from exc
-                self._script_shas[script_name] = sha
+            self._ensure_redis()
+            redis_client = cast("RedisProtocol", self._redis)
+            try:
+                for script_name, script_content in iter_missing_scripts(self._script_shas):
+                    try:
+                        sha = await redis_client.script_load(script_content)
+                    except RedisError as exc:
+                        raise RateLimitBackendUnavailableError(
+                            "Failed to load Redis Lua scripts."
+                        ) from exc
+                    self._script_shas[script_name] = sha
+            except BaseException as init_error:
+                # A partially loaded script cache belongs to this client. Drop
+                # it with the owned client so retries start from a clean state.
+                if self._owns_client:
+                    self._script_shas.clear()
+                    try:
+                        await self.close()
+                    except BaseException as close_error:
+                        init_error.add_note(
+                            f"Redis cleanup after initialization failure also failed: {close_error!r}"
+                        )
+                raise
 
     async def check_and_increment(
         self,
@@ -210,7 +223,10 @@ class RedisBackend:
                 raise RateLimitBackendConfigurationError(
                     "Lua scripts not initialized after reload."
                 ) from exc
-            return cast(list[Any], await redis_client.evalsha(new_sha, len(keys), *keys, *args))
+            try:
+                return cast(list[Any], await redis_client.evalsha(new_sha, len(keys), *keys, *args))
+            except (RedisConnectionError, RedisTimeoutError, RedisError) as retry_exc:
+                raise RateLimitBackendUnavailableError("Redis backend unavailable.") from retry_exc
         except (RedisConnectionError, RedisTimeoutError, RedisError) as exc:
             raise RateLimitBackendUnavailableError("Redis backend unavailable.") from exc
 
@@ -291,12 +307,13 @@ class RedisBackend:
         """
         if not self._owns_client:
             return
-        if self._redis is not None and hasattr(self._redis, "aclose"):
-            await self._redis.aclose()
-            self._redis = None
-        elif self._redis is not None and hasattr(self._redis, "close"):
-            await self._redis.close()
-            self._redis = None
+        redis_client = self._redis
+        self._redis = None
+        self._script_shas.clear()
+        if redis_client is not None and hasattr(redis_client, "aclose"):
+            await redis_client.aclose()
+        elif redis_client is not None and hasattr(redis_client, "close"):
+            await redis_client.close()
 
 
 # Protocol for Redis client methods used by this backend

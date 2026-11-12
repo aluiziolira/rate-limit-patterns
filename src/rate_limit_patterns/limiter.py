@@ -72,12 +72,30 @@ class RateLimiter:
         full_key = self._build_key(key)
         return await self._backend.check_and_increment(full_key, self._config)
 
+    async def _close_backend(self) -> None:
+        closer = getattr(self._backend, "close", None)
+        if closer is None:
+            return
+        result = closer()
+        if inspect.isawaitable(result):
+            await result
+
     async def __aenter__(self) -> RateLimiter:
-        initializer = getattr(self._backend, "initialize", None)
-        if initializer is not None:
-            result = initializer()
-            if inspect.isawaitable(result):
-                await result
+        try:
+            initializer = getattr(self._backend, "initialize", None)
+            if initializer is not None:
+                result = initializer()
+                if inspect.isawaitable(result):
+                    await result
+        except BaseException as init_error:
+            # __aexit__ is not called when __aenter__ raises; close partial resources.
+            try:
+                await self._close_backend()
+            except BaseException as close_error:
+                init_error.add_note(
+                    f"Backend cleanup after initialization failure also failed: {close_error!r}"
+                )
+            raise
         return self
 
     async def __aexit__(
@@ -86,11 +104,7 @@ class RateLimiter:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        closer = getattr(self._backend, "close", None)
-        if closer is not None:
-            result = closer()
-            if inspect.isawaitable(result):
-                await result
+        await self._close_backend()
 
     async def allow(self, key: str) -> bool:
         """Check if a key is allowed and consume capacity.
@@ -152,15 +166,35 @@ class SyncRateLimiter:
         full_key = self._build_key(key)
         self._backend.reset(full_key)
 
+    def _close_backend(self) -> None:
+        closer = getattr(self._backend, "close", None)
+        if closer is None:
+            return
+        result = closer()
+        if inspect.isawaitable(result):
+            raise RuntimeError(
+                "SyncRateLimiter backend close() returned awaitable; use RateLimiter instead."
+            )
+
     def __enter__(self) -> SyncRateLimiter:
-        initializer = getattr(self._backend, "initialize", None)
-        if initializer is not None:
-            result = initializer()
-            if inspect.isawaitable(result):
-                raise RuntimeError(
-                    "SyncRateLimiter backend initialize() returned awaitable; "
-                    "use RateLimiter instead."
+        try:
+            initializer = getattr(self._backend, "initialize", None)
+            if initializer is not None:
+                result = initializer()
+                if inspect.isawaitable(result):
+                    raise RuntimeError(
+                        "SyncRateLimiter backend initialize() returned awaitable; "
+                        "use RateLimiter instead."
+                    )
+        except BaseException as init_error:
+            # __exit__ is not called when __enter__ raises; close partial resources.
+            try:
+                self._close_backend()
+            except BaseException as close_error:
+                init_error.add_note(
+                    f"Backend cleanup after initialization failure also failed: {close_error!r}"
                 )
+            raise
         return self
 
     def __exit__(
@@ -169,10 +203,4 @@ class SyncRateLimiter:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        closer = getattr(self._backend, "close", None)
-        if closer is not None:
-            result = closer()
-            if inspect.isawaitable(result):
-                raise RuntimeError(
-                    "SyncRateLimiter backend close() returned awaitable; use RateLimiter instead."
-                )
+        self._close_backend()

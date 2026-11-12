@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -182,6 +183,128 @@ class TestRedisBackendUnit:
             assert mock_redis.script_load.called
 
     @pytest.mark.asyncio
+    async def test_initialize_closes_owned_client_on_script_load_failure(
+        self, mock_redis: MagicMock
+    ) -> None:
+        """URL-created clients are closed if script loading fails mid-initialize."""
+        from redis.exceptions import RedisError
+
+        mock_redis.script_load = AsyncMock(side_effect=RedisError("load failed"))
+        mock_redis.aclose = AsyncMock()
+
+        with patch(
+            "rate_limit_patterns.backend.redis.Redis",
+            return_value=mock_redis,
+        ):
+            backend = RedisBackend(url="redis://localhost")
+
+            with pytest.raises(RateLimitBackendUnavailableError):
+                await backend.initialize()
+
+            mock_redis.aclose.assert_awaited()
+            assert backend._redis is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fail_at", [0, 1, 2])
+    @pytest.mark.parametrize("lazy", [False, True])
+    async def test_initialize_closes_partial_owned_client_and_allows_retry(
+        self, mock_redis: MagicMock, fail_at: int, lazy: bool
+    ) -> None:
+        from redis.exceptions import RedisError
+
+        outcomes = [f"sha-{i}" for i in range(fail_at)] + [RedisError("load failed")]
+        mock_redis.script_load = AsyncMock(side_effect=outcomes)
+        mock_redis.aclose = AsyncMock()
+        with patch("rate_limit_patterns.backend.redis.Redis", return_value=mock_redis):
+            backend = RedisBackend(url="redis://localhost")
+            operation = (
+                backend.check_and_increment(
+                    "key", RateLimitConfig(algorithm="token_bucket", limit=1, period=1)
+                )
+                if lazy
+                else backend.initialize()
+            )
+            with pytest.raises(RateLimitBackendUnavailableError):
+                await operation
+            mock_redis.aclose.assert_awaited_once()
+            assert backend._redis is None
+            assert backend._script_shas == {}
+            mock_redis.script_load = AsyncMock(return_value="retry-sha")
+            await backend.initialize()
+            assert len(backend._script_shas) == 3
+
+    @pytest.mark.asyncio
+    async def test_waiting_initializer_uses_replacement_client(self) -> None:
+        from redis.exceptions import RedisError
+
+        loading = asyncio.Event()
+        fail = asyncio.Event()
+
+        async def fail_load(script: str) -> str:
+            loading.set()
+            await fail.wait()
+            raise RedisError("load failed")
+
+        first = MagicMock(script_load=AsyncMock(side_effect=fail_load), aclose=AsyncMock())
+        replacement = MagicMock(script_load=AsyncMock(return_value="sha"), aclose=AsyncMock())
+        with patch("rate_limit_patterns.backend.redis.Redis", side_effect=[first, replacement]):
+            backend = RedisBackend(url="redis://localhost")
+            initial = asyncio.create_task(backend.initialize())
+            await loading.wait()
+            waiting = asyncio.create_task(backend.initialize())
+            await asyncio.sleep(0)
+            fail.set()
+            results = await asyncio.gather(initial, waiting, return_exceptions=True)
+
+        assert isinstance(results[0], RateLimitBackendUnavailableError)
+        assert results[1] is None
+        first.aclose.assert_awaited_once()
+        first.script_load.assert_awaited_once()
+        assert replacement.script_load.await_count == 3
+        assert backend._redis is replacement
+
+    @pytest.mark.asyncio
+    async def test_cleanup_failure_preserves_initialization_error(
+        self, mock_redis: MagicMock
+    ) -> None:
+        from redis.exceptions import RedisError
+
+        mock_redis.script_load = AsyncMock(side_effect=RedisError("load failed"))
+        mock_redis.aclose = AsyncMock(side_effect=RuntimeError("close failed"))
+        replacement = MagicMock(script_load=AsyncMock(return_value="sha"), aclose=AsyncMock())
+        with patch(
+            "rate_limit_patterns.backend.redis.Redis", side_effect=[mock_redis, replacement]
+        ):
+            backend = RedisBackend(url="redis://localhost")
+            with pytest.raises(RateLimitBackendUnavailableError, match="Failed to load") as caught:
+                await backend.initialize()
+            assert any("close failed" in note for note in caught.value.__notes__)
+            assert backend._redis is None
+            await backend.close()
+            mock_redis.aclose.assert_awaited_once()
+            await backend.initialize()
+            assert backend._redis is replacement
+            assert replacement.script_load.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_initialize_keeps_injected_client_on_script_load_failure(
+        self, mock_redis: MagicMock
+    ) -> None:
+        """Injected clients are not closed when script loading fails."""
+        from redis.exceptions import RedisError
+
+        mock_redis.script_load = AsyncMock(side_effect=RedisError("load failed"))
+        mock_redis.aclose = AsyncMock()
+
+        backend = RedisBackend(client=mock_redis)
+
+        with pytest.raises(RateLimitBackendUnavailableError):
+            await backend.initialize()
+
+        mock_redis.aclose.assert_not_called()
+        assert backend._redis is mock_redis
+
+    @pytest.mark.asyncio
     async def test_lazy_initialize_on_check(
         self, mock_redis: MagicMock, config: RateLimitConfig
     ) -> None:
@@ -221,6 +344,37 @@ class TestRedisBackendUnit:
             result = await backend.check_and_increment("user:123", config)
 
             assert result.allowed is True
+            assert mock_redis.script_load.called
+            assert mock_redis.evalsha.call_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "retry_error",
+        [
+            RedisConnectionError("down after reload"),
+            RedisTimeoutError("timeout after reload"),
+        ],
+        ids=["connection", "timeout"],
+    )
+    async def test_noscript_retry_translates_errors(
+        self,
+        mock_redis: MagicMock,
+        config: RateLimitConfig,
+        retry_error: Exception,
+    ) -> None:
+        """Errors raised by the post-NOSCRIPT retry become backend-unavailable."""
+        mock_redis.evalsha = AsyncMock(side_effect=[NoScriptError("NOSCRIPT"), retry_error])
+
+        with patch(
+            "rate_limit_patterns.backend.redis.Redis",
+            return_value=mock_redis,
+        ):
+            backend = RedisBackend(url="redis://localhost")
+            backend._script_shas = {"token_bucket": "stale_sha"}
+
+            with pytest.raises(RateLimitBackendUnavailableError):
+                await backend.check_and_increment("user:123", config)
+
             assert mock_redis.script_load.called
             assert mock_redis.evalsha.call_count == 2
 

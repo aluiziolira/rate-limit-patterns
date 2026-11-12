@@ -5,14 +5,13 @@
 ![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)
 ![Type Checked](https://img.shields.io/badge/type--checked-mypy-blue)
 ![Redis](https://img.shields.io/badge/redis-5.0+-red.svg)
-![Performance](https://img.shields.io/badge/throughput-200K%2B%20RPS%20measured-green)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-![Live benchmark run: in-process latency, Redis Lua latency, and multi-instance correctness](docs/assets/benchmark-proof.gif)
+![Live benchmark run: in-process latency, Redis Lua latency, and shared-quota correctness](docs/assets/benchmark-proof.gif)
 
-*Live benchmark run recorded with [VHS](https://github.com/charmbracelet/vhs) ([`demo/benchmark-proof.tape`](demo/benchmark-proof.tape)) — nothing mocked: in-process latency, the atomic Redis Lua backend, and a 2-instance correctness check all run for real. Regenerate with `make demo-gif`.*
+*Demo recording via [VHS](https://github.com/charmbracelet/vhs) ([`demo/benchmark-proof.tape`](demo/benchmark-proof.tape)). Treat on-screen numbers as historical for that recording only — regenerate with `make demo-gif`, and use the reproducible commands below for current measurements.*
 
-This library provides a suite of algorithms to enforce quotas with **microsecond-scale in-process overhead** and a **Redis Lua-backed atomic path** for robust multi-instance deployments.
+This library provides token bucket, leaky bucket, and sliding window log algorithms with an in-process backend and a Redis Lua-backed atomic path for shared quotas.
 
 ### Core Strategies
 *   **Token Bucket**: Burst-friendly average rate enforcement with `O(1)` state (ideal for public APIs).
@@ -21,43 +20,27 @@ This library provides a suite of algorithms to enforce quotas with **microsecond
 
 ---
 
-## Benchmark Proof
+## Benchmarks
 
-The numbers below come from the live, unedited benchmark run shown in the recording at the top of this page.
+Hardcoded throughput/latency tables are intentionally omitted here. Absolute numbers vary by host, Python build, and Redis placement; commit JSON under `benchmarks/results/` is gitignored.
 
-**Environment**: Linux (Fedora, kernel 7.0) | Python 3.14 | Redis via Docker | **Date**: 2026-07-04
+**Reproducible command (local latency):**
 
-Reproduce it yourself: `make benchmark` (local) and `make benchmark-redis-docker` (distributed) — every run also writes raw JSON to `benchmarks/results/`.
-
-### 1. In-Process Performance (Local Memory)
-At **5,000 concurrent requests**, the stateless core decides in single-digit microseconds.
-
-```text
-Algorithm        p50       p99       Throughput
-Token Bucket     2.8 µs    5.2 µs    244,081 rps
-Sliding Window   2.4 µs    4.5 µs    289,675 rps
-Leaky Bucket     2.6 µs    4.5 µs    269,123 rps
+```bash
+make benchmark-latency
 ```
 
-### 2. Distributed Performance (Redis Lua)
-At **250 concurrent requests**, the Redis backend maintains strict atomicity with predictable network/execution latency.
+That writes a timestamped `benchmarks/results/latency_*.json` artifact and prints a formatted summary. The formatter reports per-algorithm speed, stability, consistency, and throughput classifications, plus p50, p95, and p99 latency by concurrency level. Actual measurements depend on the host; no throughput figures are asserted here.
 
-```text
-Algorithm        p50       p99        Throughput
-Token Bucket     7.29 ms   11.37 ms   16,730 rps
-Sliding Window   7.83 ms   10.75 ms   14,075 rps
-Leaky Bucket     4.95 ms    8.39 ms   20,370 rps
+Redis-backed scenarios (requires Redis):
+
+```bash
+make benchmark-redis-docker
 ```
 
-### 3. Distributed Correctness Verification
-Two independent processes sharing a global limit of 100/60s admit **exactly 100 requests** — zero over-limit leakage, no coordination beyond the atomic Lua scripts.
+The shared-quota / multi-instance scenario exercises **two Redis clients in one process** against a shared key. It validates Lua atomicity under concurrent callers; it does **not** measure cross-host distributed behavior.
 
-```text
-Algorithm        Accepted / Expected   Status
-Token Bucket     100 / 100             Distributed-Safe ✓
-Sliding Window   100 / 100             Distributed-Safe ✓
-Leaky Bucket     100 / 100             Distributed-Safe ✓
-```
+See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for methodology and additional targets (`make benchmark`, `make benchmark-memory`, `make benchmark-fairness`).
 
 ---
 
@@ -67,14 +50,14 @@ Most home-grown rate limiters fail in two critical ways:
 1.  **Race Conditions**: Naive "Read-Check-Write" patterns allow parallel requests to slip through before the counter updates.
 2.  **Clock Drift**: relying on server-local time without synchronization leads to inconsistent windows across a fleet.
 
-This project solves these specific gaps by implementing **atomic-by-design** algorithms where every decision is the result of a single, indivisible Lua script execution on the storage backend.
+This project addresses check-then-act races on a shared Redis backend by running each admission decision as one Lua script (`EVALSHA`): allow/deny and the state update cannot interleave for the same key among concurrent clients sharing that Redis instance. Failover, lost state, ambiguous timeouts, and Redis Cluster behavior remain out of scope — see [Remaining Limits](#remaining-limits).
 
 ---
 
 ## Technical Decisions
 
-### 1. Atomicity is Non-Negotiable
-Distributed systems cannot rely on application-level locks for rate limiting without destroying throughput. Instead of a "check then increment" flow (which is vulnerable to race conditions), this library pushes the logic to the data. By using Redis Lua scripts (`EVALSHA`), we ensure that the calculation of "allowed vs. denied" and the "state update" happen in a single frozen moment of time. This guarantees that even if 500 requests hit 10 containers simultaneously, the global limit is respected exactly.
+### 1. Per-decision Lua atomicity
+Application-level locks are a poor fit for hot-path rate limiting across processes. Instead of a separate "check then increment", Redis-backed decisions use Lua scripts (`EVALSHA`) so the allow/deny calculation and state update run as one atomic operation per key. Concurrent clients that share a Redis instance therefore cannot interleave a check and an update for that key. This does not claim correctness under failover, lost Redis state, ambiguous timeouts after a client gives up, or Redis Cluster beyond hash-tag key placement — see [Remaining Limits](#remaining-limits).
 
 ### 2. Stateless Core, Swappable Backends
 The algorithmic logic is decoupled from storage. Each algorithm implements a pure function protocol: `(state, config, time) -> (new_state, decision)`.
@@ -82,7 +65,7 @@ The algorithmic logic is decoupled from storage. Each algorithm implements a pur
 *   **Trade-off**: While this requires maintaining dual implementations (Python + Lua), it ensures that our local simulations (`make benchmark-local`) are mathematically equivalent to production behavior, enabling high-confidence offline testing.
 
 ### 3. Explicit Memory vs. Precision Trade-offs
-We expose the cost of precision. The **Sliding Window Log** offers "audit-grade" accuracy (remembering the exact timestamp of every request) but at `O(N)` memory cost. For high-throughput endpoints (e.g., 10k RPS), storing 10k timestamps is wasteful. In those cases, we explicitly recommend **Token Bucket** or **Leaky Bucket**, which maintain `O(1)` state (just two numbers: `tokens` and `last_updated`), sacrificing microscopic window precision for massive scalability.
+We expose the cost of precision. The **Sliding Window Log** keeps an exact rolling-window quota (timestamp per request) at `O(N)` memory cost. For high-throughput endpoints that cannot afford that storage, prefer **Token Bucket** or **Leaky Bucket**, which maintain `O(1)` state (`tokens`/`queue_size` and a last-update timestamp) and trade fine-grained window exactness for bounded memory.
 
 ---
 
@@ -128,3 +111,11 @@ if __name__ == "__main__":
 *   [**API Reference**](docs/API.md)
 *   [**Algorithm Deep Dive**](docs/ALGORITHMS.md)
 *   [**Production Recipes**](docs/PRODUCTION_RECIPES.md)
+
+## Remaining Limits
+
+Engineering trade-offs that remain intentional:
+
+*   **Local state is per backend instance** — `LocalBackend` / `SyncLocalBackend` instances do not share quotas, including instances in the same process.
+*   **Script atomicity is per decision** — each `EVALSHA` is atomic; there is no multi-key saga across independent rate-limit keys.
+*   **Out of scope** — automatic failover, reconstructing lost Redis state, resolving ambiguous responses after a timeout, and Redis Cluster operation beyond hash-tag key placement for sliding window.
