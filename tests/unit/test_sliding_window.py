@@ -136,6 +136,22 @@ class TestSlidingWindowAlgorithm:
         assert meta1["retry_after"] is not None
         assert meta2["reset_at"] >= meta1["reset_at"]
 
+    def test_out_of_order_timestamps_use_oldest_for_retry_and_eviction(
+        self, algorithm: SlidingWindowAlgorithm
+    ) -> None:
+        config = RateLimitConfig(algorithm="sliding_window", limit=2, period=5)
+        _, state, _ = algorithm.compute(algorithm.initial_state(config), config, 1000)
+        _, state, _ = algorithm.compute(state, config, 999)
+        allowed, state, meta = algorithm.compute(state, config, 1000)
+
+        assert allowed is False
+        assert meta["retry_after"] == 4
+        assert meta["reset_at"] == 1004
+        allowed, state, meta = algorithm.compute(state, config, 1005)
+        assert allowed is True
+        assert state["requests"] == [1005]
+        assert meta["reset_at"] == 1010
+
     def test_no_burst_allowed(
         self, algorithm: SlidingWindowAlgorithm, config: RateLimitConfig
     ) -> None:

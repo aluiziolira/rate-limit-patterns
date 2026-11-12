@@ -113,6 +113,20 @@ async def test_sliding_window_equivalence(redis_backend: RedisBackend) -> None:
 
 @requires_redis
 @pytest.mark.asyncio
+async def test_sliding_window_out_of_order_equivalence(redis_backend: RedisBackend) -> None:
+    """Backward accepted timestamps still select the chronological oldest request."""
+    await _run_sequence(
+        redis_backend,
+        algorithm="sliding_window",
+        key="sliding:out-of-order",
+        times=[1000.0, 999.0, 1000.0],
+        limit=2,
+        period=5,
+    )
+
+
+@requires_redis
+@pytest.mark.asyncio
 async def test_leaky_bucket_equivalence(redis_backend: RedisBackend) -> None:
     await _run_sequence(
         redis_backend,

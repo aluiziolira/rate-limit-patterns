@@ -63,7 +63,7 @@ class SlidingWindowAlgorithm:
                 "count": len(valid_requests),
             }
             remaining = config.limit - len(valid_requests)
-            oldest = valid_requests[0] if valid_requests else current_time
+            oldest = min(valid_requests) if valid_requests else current_time
             reset_at = oldest + config.period
             meta: dict[str, Any] = {
                 "remaining": remaining,
@@ -73,7 +73,7 @@ class SlidingWindowAlgorithm:
             return True, new_state, meta
         else:
             # Deny: calculate retry_after based on oldest request
-            oldest_request = valid_requests[0]
+            oldest_request = min(valid_requests)
             retry_after = math.ceil(oldest_request + config.period - current_time)
             retry_after = max(1, retry_after)
             reset_at = oldest_request + config.period
