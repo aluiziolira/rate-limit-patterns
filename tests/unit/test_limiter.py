@@ -1,11 +1,15 @@
 """Unit tests for RateLimiter facade."""
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from redis.exceptions import RedisError
 
 from rate_limit_patterns import RateLimitConfig, RateLimiter, RateLimitResult
 from rate_limit_patterns.backend.local import LocalBackend
+from rate_limit_patterns.backend.redis import RedisBackend
+from rate_limit_patterns.exceptions import RateLimitBackendUnavailableError
 
 
 class PrefixedBackend:
@@ -54,6 +58,14 @@ class LifecycleBackend:
 
     async def get_metrics(self, key: str) -> dict[str, Any]:
         raise NotImplementedError
+
+
+class FailingInitBackend(LifecycleBackend):
+    """Backend that fails during initialize after allocating resources."""
+
+    async def initialize(self) -> None:
+        self.initialized = True
+        raise RuntimeError("initialize failed")
 
 
 class TestRateLimiter:
@@ -146,3 +158,39 @@ class TestRateLimiter:
             assert backend.initialized is True
 
         assert backend.closed is True
+
+    @pytest.mark.asyncio
+    async def test_context_manager_closes_on_failed_enter(self, config: RateLimitConfig) -> None:
+        """Failed __aenter__ still closes backends that started initialize."""
+        backend = FailingInitBackend()
+        limiter = RateLimiter(backend=backend, config=config)
+
+        with pytest.raises(RuntimeError, match="initialize failed"):
+            async with limiter:
+                pass
+
+        assert backend.initialized is True
+        assert backend.closed is True
+
+    @pytest.mark.asyncio
+    async def test_redis_context_manager_closes_client_on_script_load_failure(
+        self, config: RateLimitConfig
+    ) -> None:
+        """URL-created Redis clients are closed when script load fails in __aenter__."""
+        mock_redis = MagicMock()
+        mock_redis.script_load = AsyncMock(side_effect=RedisError("script load failed"))
+        mock_redis.aclose = AsyncMock()
+
+        with patch(
+            "rate_limit_patterns.backend.redis.Redis",
+            return_value=mock_redis,
+        ):
+            backend = RedisBackend(url="redis://localhost")
+            limiter = RateLimiter(backend=backend, config=config)
+
+            with pytest.raises(RateLimitBackendUnavailableError):
+                async with limiter:
+                    pass
+
+            mock_redis.aclose.assert_awaited()
+            assert backend._redis is None

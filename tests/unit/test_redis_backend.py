@@ -182,6 +182,46 @@ class TestRedisBackendUnit:
             assert mock_redis.script_load.called
 
     @pytest.mark.asyncio
+    async def test_initialize_closes_owned_client_on_script_load_failure(
+        self, mock_redis: MagicMock
+    ) -> None:
+        """URL-created clients are closed if script loading fails mid-initialize."""
+        from redis.exceptions import RedisError
+
+        mock_redis.script_load = AsyncMock(side_effect=RedisError("load failed"))
+        mock_redis.aclose = AsyncMock()
+
+        with patch(
+            "rate_limit_patterns.backend.redis.Redis",
+            return_value=mock_redis,
+        ):
+            backend = RedisBackend(url="redis://localhost")
+
+            with pytest.raises(RateLimitBackendUnavailableError):
+                await backend.initialize()
+
+            mock_redis.aclose.assert_awaited()
+            assert backend._redis is None
+
+    @pytest.mark.asyncio
+    async def test_initialize_keeps_injected_client_on_script_load_failure(
+        self, mock_redis: MagicMock
+    ) -> None:
+        """Injected clients are not closed when script loading fails."""
+        from redis.exceptions import RedisError
+
+        mock_redis.script_load = AsyncMock(side_effect=RedisError("load failed"))
+        mock_redis.aclose = AsyncMock()
+
+        backend = RedisBackend(client=mock_redis)
+
+        with pytest.raises(RateLimitBackendUnavailableError):
+            await backend.initialize()
+
+        mock_redis.aclose.assert_not_called()
+        assert backend._redis is mock_redis
+
+    @pytest.mark.asyncio
     async def test_lazy_initialize_on_check(
         self, mock_redis: MagicMock, config: RateLimitConfig
     ) -> None:

@@ -214,6 +214,70 @@ def test_sync_rate_limiter_facade() -> None:
         assert result.allowed is True
 
 
+def test_sync_rate_limiter_closes_on_failed_enter() -> None:
+    """Failed __enter__ still closes backends that started initialize."""
+
+    class FailingInitSyncBackend:
+        def __init__(self) -> None:
+            self.initialized = False
+            self.closed = False
+
+        def initialize(self) -> None:
+            self.initialized = True
+            raise RuntimeError("initialize failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+        def check_and_increment(
+            self, key: str, config: RateLimitConfig, *, now: float | None = None
+        ) -> Any:
+            raise NotImplementedError
+
+        def reset(self, key: str) -> None:
+            raise NotImplementedError
+
+        def get_metrics(self, key: str) -> dict[str, Any]:
+            raise NotImplementedError
+
+    backend = FailingInitSyncBackend()
+    config = RateLimitConfig(
+        algorithm="token_bucket",
+        limit=1,
+        period=1,
+        burst_size=1,
+    )
+    limiter = SyncRateLimiter(backend=backend, config=config)
+
+    with pytest.raises(RuntimeError, match="initialize failed"):
+        with limiter:
+            pass
+
+    assert backend.initialized is True
+    assert backend.closed is True
+
+
+def test_sync_redis_context_manager_closes_client_on_script_load_failure() -> None:
+    """Injected sync Redis clients are closed when script load fails in __enter__."""
+    mock_redis = MagicMock()
+    mock_redis.script_load.side_effect = RedisError("script load failed")
+
+    backend = SyncRedisBackend(client=mock_redis)
+    config = RateLimitConfig(
+        algorithm="token_bucket",
+        limit=1,
+        period=1,
+        burst_size=1,
+    )
+    limiter = SyncRateLimiter(backend=backend, config=config)
+
+    with pytest.raises(RateLimitBackendUnavailableError):
+        with limiter:
+            pass
+
+    mock_redis.close.assert_called()
+
+
 def test_sync_redis_backend_uses_evalsha() -> None:
     """SyncRedisBackend uses evalsha on the provided client."""
     mock_redis = MagicMock()

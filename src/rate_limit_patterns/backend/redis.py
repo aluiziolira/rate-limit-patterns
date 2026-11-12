@@ -134,15 +134,22 @@ class RedisBackend:
         redis_client = cast("RedisProtocol", self._redis)
         from redis.exceptions import RedisError
 
-        async with self._init_lock:
-            for script_name, script_content in iter_missing_scripts(self._script_shas):
-                try:
-                    sha = await redis_client.script_load(script_content)
-                except RedisError as exc:
-                    raise RateLimitBackendUnavailableError(
-                        "Failed to load Redis Lua scripts."
-                    ) from exc
-                self._script_shas[script_name] = sha
+        try:
+            async with self._init_lock:
+                for script_name, script_content in iter_missing_scripts(self._script_shas):
+                    try:
+                        sha = await redis_client.script_load(script_content)
+                    except RedisError as exc:
+                        raise RateLimitBackendUnavailableError(
+                            "Failed to load Redis Lua scripts."
+                        ) from exc
+                    self._script_shas[script_name] = sha
+        except BaseException:
+            # Close owned clients that never finished loading scripts so lazy
+            # connect + failed load cannot leave an orphaned connection pool.
+            if self._owns_client and not self._script_shas:
+                await self.close()
+            raise
 
     async def check_and_increment(
         self,
