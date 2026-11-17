@@ -2,7 +2,7 @@
 name = "rate-limit-patterns"
 version = "0.1.0"
 description = "Production-grade rate limiting algorithms: token bucket, sliding window, leaky bucket"
-authors = ["Aluizio Lira <alumlira@gmail.com>"]
+authors = ["Aluizio Lira <aluizio@aluiziolira.dev>"]
 readme = "README.md"
 packages = [{include = "rate_limit_patterns", from = "src"}]
 
